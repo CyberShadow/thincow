@@ -512,4 +512,4 @@ void thincow(
 
 mixin main!(funopt!thincow);
 
-extern(C) int openat(int dirfd, const char *pathname, int flags);
+extern(C) int openat(int dirfd, const char *pathname, int flags, ...);
