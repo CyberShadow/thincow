@@ -50,6 +50,13 @@ Usage notes
 
 - It is not safe to resume after an ungraceful termination or power failure.
 
+Building
+--------
+
+- Install [a D compiler](https://dlang.org/download.html)
+- Install [Dub](https://github.com/dlang/dub), if it wasn't included with your D compiler
+- Run `dub build -b release`
+
 Example
 -------
 
