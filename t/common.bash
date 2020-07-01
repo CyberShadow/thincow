@@ -3,11 +3,49 @@ set -eEuo pipefail
 test_name=$(basename "$0" .sh)
 test_dir=tmp/$test_name
 
+echo "$PWD"/"$test_dir"
+
+#########################################################################
+# Cleanup
+
+# Clean up mounts (preemptively)
+while read -r what where _
+do
+	if [[ "$where" == "$PWD"/"$test_dir"/* ]]
+	then
+		umount "$what" || true
+	fi
+done < /proc/mounts
+
+# Clean up loop devices
+losetup | \
+	while read -r name _ _ _ _ file
+	do
+		if [[ "$file" == "$PWD"/"$test_dir"/* ]]
+		then
+			losetup -d "$name"
+		fi
+	done
+
+# Clean up mounts
+while read -r what where _
+do
+	if [[ "$where" == "$PWD"/"$test_dir"/* ]]
+	then
+		umount "$what"
+	fi
+done < /proc/mounts
+
+
 if ! rm -rf "$test_dir"
 then
 	fusermount -u "$test_dir"/target
 	rm -rf "$test_dir"
 fi
+
+#########################################################################
+# Setup
+
 mkdir -p "$test_dir"
 cd "$test_dir"
 mkdir data target upstream
