@@ -1,3 +1,17 @@
+/**
+ * Create a deduplicated, COW view of block devices as a FUSE
+ * filesystem.
+ *
+ * License:
+ *   This Source Code Form is subject to the terms of
+ *   the Mozilla Public License, v. 2.0. If a copy of
+ *   the MPL was not distributed with this file, You
+ *   can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Authors:
+ *   Vladimir Panteleev <vladimir@thecybershadow.net>
+ */
+
 import core.sys.posix.fcntl;
 import core.sys.posix.sys.ioctl;
 import core.sys.posix.sys.mman;
