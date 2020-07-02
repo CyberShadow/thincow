@@ -1,6 +1,8 @@
 #!/bin/bash
 source common.bash
 
+# Model a practical btrfs RAID10 conversion and migration to a single device.
+
 if [[ "$EUID" -ne 0 ]]
 then
 	echo 'Not root, skipping'
