@@ -65,7 +65,6 @@ function run_thincow() {
 function get_usage() {
 	local script
 	script=$(cat <<'EOF'
-seek STDIN,0,2;
 $total=0; $pos=0;
 while (1) {
 	  seek STDIN,$pos,3;
