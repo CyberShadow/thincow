@@ -18,7 +18,7 @@ do
 done
 mkfs.btrfs "${loops[@]}" -d raid10 -m raid1c4
 mkdir mnt
-mount -o "$( IFS=, ; echo "${loops[*]/#/device=}" )" upstream/"${devs[0]}" mnt
+mount -o "$( IFS=, ; echo "${loops[*]/#/device=}" )" "${loops[0]}" mnt
 
 ( seq 1e99 || true ) | dd iflag=fullblock of=mnt/file bs=1M count=150
 hash=$(md5sum < mnt/file)
@@ -35,7 +35,7 @@ for d in "${devs[@]}"
 do
 	loops+=("$(losetup -f --show target/"$d")")
 done
-mount -o "$( IFS=, ; echo "${loops[*]/#/device=}" )" upstream/"${devs[0]}" mnt
+mount -o "$( IFS=, ; echo "${loops[*]/#/device=}" )" "${loops[0]}" mnt
 
 single_loop=$(losetup -f --show target/single)
 btrfs device add "$single_loop" mnt
@@ -59,4 +59,4 @@ losetup -d "${loops[@]}"
 
 fusermount -u target
 
-[[ "$(get_usage data/cowdata)" -lt $((4*1024*1024)) ]]
+[[ "$(get_usage data/cowdata)" -lt $((5*1024*1024)) ]]
