@@ -79,23 +79,29 @@ Dev[] devs;
 /// COW block index
 struct COWIndex
 {
-	long value; /// Reference count, or, free list pointer
+	enum Type : ubyte
+	{
+		lastBlock,  /// free - how many blocks have been allocated so far, includes zero
+		nextFree,   /// free - index to next free block
+		refCount,   /// used - number of references to this block
+	}
 
-	@property bool free() const { return value <= 0; }
-	@property bool freeListNode() const { return value < 0; }
-	@property size_t nextFree() const { assert(freeListNode); return ~value; }
-	@property void nextFree(size_t i) { value = ~i; assert(freeListNode); }
-	@property ulong refCount() const { assert(!freeListNode); return value; }
-	@property void refCount(ulong i) { value = i; assert(!freeListNode); }
+	ulong value;
+
+	@property Type type() const { return cast(Type)(value >> 62); }
+	@property bool free() const { return (value & (1L << 63)) == 0; } // type is lastBlock or nextFree
+
+	@property size_t lastBlock() const { assert(type == Type.lastBlock); return value & ((1L << 62) - 1); }
+	@property void lastBlock(size_t i) { value = i | (ulong(Type.lastBlock) << 62); assert(type == Type.lastBlock); }
+	@property size_t nextFree() const { assert(type == Type.nextFree); return value & ((1L << 62) - 1); }
+	@property void nextFree(size_t i) { value = i | (ulong(Type.nextFree) << 62); assert(type == Type.nextFree); }
+	@property size_t refCount() const { assert(type == Type.refCount); return value & ((1L << 62) - 1); }
+	@property void refCount(size_t i) { value = i | (ulong(Type.refCount) << 62); assert(type == Type.refCount); }
 }
 /// Our lookup for COW blocks
 COWIndex[] cowMap;
 /// The raw storage for COW data (data which does not exist on upstream devices)
 ubyte[] cowData;
-
-/// The COW index 0 is reserved.
-/// Take advantage of this to store some metadata in the COW data block 0.
-ref ulong numCowBlocks() { return *cast(ulong*)cowData.ptr; }
 
 /// Hash some bytes.
 ulong hash(const(ubyte)[] block)
@@ -241,10 +247,18 @@ const(ubyte)[] readBlock(BlockIndex bi)
 BlockIndex getNextCow()
 {
 	BlockIndex result;
-	if (cowMap[0].freeListNode)
-		result.cow = cowMap[0].nextFree;
-	else
-		result.cow = 1 + numCowBlocks;
+	final switch (cowMap[0].type)
+	{
+		case COWIndex.Type.lastBlock:
+			result.cow = 1 + cowMap[0].lastBlock;
+			break;
+		case COWIndex.Type.nextFree:
+			result.cow = cowMap[0].nextFree;
+			break;
+		case COWIndex.Type.refCount:
+			assert(false);
+	}
+	assert(result.cow > 0);
 	assert(cowMap[result.cow].free);
 	return result;
 }
@@ -262,10 +276,18 @@ void writeBlock(Dev* dev, size_t blockIndex, const(ubyte)[] block)
 		// New block - add to COW store
 		auto offset = result.cow * blockSize;
 		cowData[offset .. offset + block.length] = block;
-		if (cowMap[0].freeListNode)
-			cowMap[0] = cowMap[result.cow];
-		else
-			numCowBlocks = result.cow;
+		final switch (cowMap[0].type)
+		{
+			case COWIndex.Type.lastBlock:
+				assert(result.cow == cowMap[0].lastBlock + 1);
+				cowMap[0].lastBlock = result.cow;
+				break;
+			case COWIndex.Type.nextFree:
+				cowMap[0] = cowMap[result.cow];
+				break;
+			case COWIndex.Type.refCount:
+				assert(false);
+		}
 		cowMap[result.cow].refCount = 1;
 	}
 	else

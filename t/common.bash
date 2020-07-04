@@ -4,8 +4,6 @@ test_name=$(basename "$0" .sh)
 test_dir=tmp/$test_name
 
 block_size=$((64*1024))
-page_size=$(getconf PAGE_SIZE)
-cow_data_header=$((block_size < page_size ? block_size : page_size))
 
 root=$(dirname "$PWD")
 
