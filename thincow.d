@@ -142,8 +142,9 @@ BlockIndex hashBlock(const(ubyte)[] block, BlockIndex bi)
 }
 
 /// Remove a block from the hash table.
-void unhashBlock(const(ubyte)[] block)
+void unhashBlock(BlockIndex bi)
 {
+	auto block = readBlock(bi);
 	assert(block.length == blockSize);
 
 	auto i = hash(block) % hashTable.length;
@@ -153,8 +154,9 @@ void unhashBlock(const(ubyte)[] block)
 		if (e.unknown)
 			assert(false, "Can't find entry to unhash");
 
-		if (block == readBlock(*e))
+		if (*e == bi)
 		{
+			assert(block == readBlock(*e), "Matched BlockIndex but not data in hash table");
 			assert(e.type == BlockIndex.Type.cow, "Unhashing non-COW block");
 			break;
 		}
@@ -333,7 +335,7 @@ void unreferenceBlock(BlockIndex bi)
 			refCount--;
 			if (refCount == 0)
 			{
-				unhashBlock(readBlock(bi));
+				unhashBlock(bi);
 				cowMap[index] = cowMap[0];
 				cowMap[0].nextFree = index;
 			}
