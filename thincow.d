@@ -148,7 +148,10 @@ void unhashBlock(const(ubyte)[] block)
 			assert(false, "Can't find entry to unhash");
 
 		if (block == readBlock(*e))
+		{
+			assert(e.type == BlockIndex.Type.cow, "Unhashing non-COW block");
 			break;
+		}
 
 		i = (i + 1) % hashTable.length;
 	}
