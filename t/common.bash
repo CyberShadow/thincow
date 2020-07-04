@@ -55,7 +55,7 @@ cd "$test_dir"
 mkdir data target upstream
 
 function run_thincow() {
-	args=("$root"/thincow --upstream=upstream --data-dir=data target --block-size="$block_size")
+	args=("$root"/thincow --upstream=upstream --data-dir=data target --block-size="$block_size" "$@")
 	if [[ -v THINCOW_TEST_DEBUG ]]
 	then
 		"${args[@]}" -f -o debug &> log.txt &

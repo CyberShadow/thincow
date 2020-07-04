@@ -12,6 +12,7 @@
  *   Vladimir Panteleev <vladimir@thecybershadow.net>
  */
 
+import core.sys.linux.sys.mman : MAP_ANONYMOUS;
 import core.sys.posix.fcntl;
 import core.sys.posix.sys.ioctl;
 import core.sys.posix.sys.mman;
@@ -455,7 +456,7 @@ void thincow(
 	Parameter!(string, "Where to mount the FUSE filesystem.") target,
 	Option!(string, "Directory containing upstream devices/symlinks.", "PATH") upstream,
 	Option!(string, "Directory where to store COW blocks.", "PATH") dataDir,
-	Option!(string, "Directory where to store metadata.\nIf unspecified, defaults to the data directory.", "PATH") metadataDir = null,
+	Option!(string, "Directory where to store metadata.\nIf unspecified, defaults to the data directory.\nSpecify - to use RAM.", "PATH") metadataDir = null,
 	Option!(size_t, "Block size. Larger blocks means smaller metadata,\nbut writes smaller than one block\nwill cause a read-modify-write.\nThe default is 65536 (64 KiB).", "BYTES") blockSize = 64*1024,
 	Option!(double, "Ratio to calculate hash table size\n(from upstream block count).\nThe default is 2.0.") hashTableRatio = 2.0,
 	Switch!("Run in foreground.", 'f') foreground = false,
@@ -502,17 +503,27 @@ void thincow(
 	{
 		auto size = recordSize * numRecords;
 		enforce(size / recordSize == numRecords, "Overflow");
-
-		auto path = dir.buildPath(name);
 		stderr.writefln("%s: %d bytes (%d records)", name, size, numRecords);
 
-		if (path.exists)
-			enforce(path.getSize() == size, "Found existing file, but it is of the wrong size: " ~ path);
+		void* ptr;
+		string path;
+		if (dir == "-")
+		{
+			path = "(in memory) " ~ name;
+			ptr = mmap(null, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
+		}
+		else
+		{
+			path = dir.buildPath(name);
 
-		auto fd = open(path.toStringz, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-		errnoEnforce(fd >= 0, "open failed: " ~ path);
-		ftruncate(fd, size);
-		auto ptr = mmap(null, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+			if (path.exists)
+				enforce(path.getSize() == size, "Found existing file, but it is of the wrong size: " ~ path);
+
+			auto fd = open(path.toStringz, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+			errnoEnforce(fd >= 0, "open failed: " ~ path);
+			ftruncate(fd, size);
+			ptr = mmap(null, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+		}
 		errnoEnforce(ptr != MAP_FAILED, "mmap failed: " ~ path);
 		return ptr[0 .. size];
 	}
