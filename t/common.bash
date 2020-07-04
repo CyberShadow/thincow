@@ -7,15 +7,17 @@ block_size=$((64*1024))
 page_size=$(getconf PAGE_SIZE)
 cow_data_header=$((block_size < page_size ? block_size : page_size))
 
-echo "$PWD"/"$test_dir"
+root=$(dirname "$PWD")
 
 #########################################################################
 # Cleanup
 
+test_dir_real=$(realpath "$test_dir")
+
 # Clean up mounts (preemptively)
 while read -r what where _
 do
-	if [[ "$where" == "$PWD"/"$test_dir"/* ]]
+	if [[ "$where" == "$test_dir_real"/* ]]
 	then
 		umount "$what" || true
 	fi
@@ -25,7 +27,7 @@ done < /proc/mounts
 losetup | \
 	while read -r name _ _ _ _ file
 	do
-		if [[ "$file" == "$PWD"/"$test_dir"/* ]]
+		if [[ "$file" == "$test_dir_real"/* ]]
 		then
 			losetup -d "$name"
 		fi
@@ -34,7 +36,7 @@ losetup | \
 # Clean up mounts
 while read -r what where _
 do
-	if [[ "$where" == "$PWD"/"$test_dir"/* ]]
+	if [[ "$where" == "$test_dir_real"/* ]]
 	then
 		umount "$what"
 	fi
@@ -55,7 +57,7 @@ cd "$test_dir"
 mkdir data target upstream
 
 function run_thincow() {
-	args=(../../../thincow --upstream=upstream --data-dir=data target --block-size="$block_size")
+	args=("$root"/thincow --upstream=upstream --data-dir=data target --block-size="$block_size")
 	if [[ -v THINCOW_TEST_DEBUG ]]
 	then
 		"${args[@]}" -f -o debug &> log.txt &
