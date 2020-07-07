@@ -37,7 +37,7 @@ __gshared: // disable TLS
 
 /// Block reference. Can refer to a block on an upstream device, or in the COW store, or nothing.
 /// Used in the hash table and block map.
-struct BlockIndex
+struct BlockRef
 {
 	enum Type
 	{
@@ -61,7 +61,7 @@ struct BlockIndex
 size_t blockSize;
 
 /// Hash -> block lookup
-BlockIndex[] hashTable;
+BlockRef[] hashTable;
 
 /// Per-device (file) information
 struct Dev
@@ -69,7 +69,7 @@ struct Dev
 	/// Memory mapped upstream device
 	const(ubyte)[] data;
 	/// Represents contents of the device we present via FUSE
-	BlockIndex[] blockMap;
+	BlockRef[] blockMap;
 	/// First block index within the global block map
 	size_t firstBlock;
 	/// File name of the device (in the upstream directory, and in the FUSE filesystem)
@@ -117,7 +117,7 @@ ulong hash(const(ubyte)[] block)
 /// Add a block to the hash table, so that we can find it later.
 /// Does nothing if the block is already in the hash table.
 /// `bi` indicates where the block's data can be found.
-BlockIndex hashBlock(const(ubyte)[] block, BlockIndex bi)
+BlockRef hashBlock(const(ubyte)[] block, BlockRef bi)
 {
 	assert(block.length == blockSize);
 
@@ -143,7 +143,7 @@ BlockIndex hashBlock(const(ubyte)[] block, BlockIndex bi)
 }
 
 /// Remove a block from the hash table.
-void unhashBlock(BlockIndex bi)
+void unhashBlock(BlockRef bi)
 {
 	auto block = readBlock(bi);
 	assert(block.length == blockSize);
@@ -157,8 +157,8 @@ void unhashBlock(BlockIndex bi)
 
 		if (*e == bi)
 		{
-			assert(block == readBlock(*e), "Matched BlockIndex but not data in hash table");
-			assert(e.type == BlockIndex.Type.cow, "Unhashing non-COW block");
+			assert(block == readBlock(*e), "Matched BlockRef but not data in hash table");
+			assert(e.type == BlockRef.Type.cow, "Unhashing non-COW block");
 			break;
 		}
 
@@ -169,7 +169,7 @@ void unhashBlock(BlockIndex bi)
 	auto j = i;
 	while (true)
 	{
-		hashTable[i] = BlockIndex.init;
+		hashTable[i] = BlockRef.init;
 		ulong k;
 		do
 		{
@@ -221,13 +221,13 @@ const(ubyte)[] readBlock(Dev* dev, size_t blockIndex)
 
 /// Read a block using its reference
 /// (either from upstream or our COW store).
-const(ubyte)[] readBlock(BlockIndex bi)
+const(ubyte)[] readBlock(BlockRef bi)
 {
 	final switch (bi.type)
 	{
-		case BlockIndex.Type.unknown:
+		case BlockRef.Type.unknown:
 			assert(false);
-		case BlockIndex.Type.upstream:
+		case BlockRef.Type.upstream:
 		{
 			auto index = bi.upstream;
 			foreach (ref dev2; devs)
@@ -238,7 +238,7 @@ const(ubyte)[] readBlock(BlockIndex bi)
 				}
 			assert(false, "Out-of-range upstream block index");
 		}
-		case BlockIndex.Type.cow:
+		case BlockRef.Type.cow:
 		{
 			auto offset = bi.cow * blockSize;
 			return cowData[offset .. offset + blockSize];
@@ -247,9 +247,9 @@ const(ubyte)[] readBlock(BlockIndex bi)
 }
 
 /// Where the next block will go should it be added to the COW store.
-BlockIndex getNextCow()
+BlockRef getNextCow()
 {
-	BlockIndex result;
+	BlockRef result;
 	final switch (cowMap[0].type)
 	{
 		case COWIndex.Type.lastBlock:
@@ -299,15 +299,15 @@ void writeBlock(Dev* dev, size_t blockIndex, const(ubyte)[] block)
 }
 
 /// Indicates that we are now using one more reference to the given block.
-void referenceBlock(BlockIndex bi)
+void referenceBlock(BlockRef bi)
 {
 	final switch (bi.type)
 	{
-		case BlockIndex.Type.unknown:
+		case BlockRef.Type.unknown:
 			assert(false);
-		case BlockIndex.Type.upstream:
+		case BlockRef.Type.upstream:
 			return; // No problem, it is on an upstream device (infinite lifetime)
-		case BlockIndex.Type.cow:
+		case BlockRef.Type.cow:
 		{
 			auto index = bi.cow;
 			assert(!cowMap[index].free);
@@ -319,15 +319,15 @@ void referenceBlock(BlockIndex bi)
 /// Indicates that we are no longer using one reference to the given block.
 /// If it was stored in the COW store, decrement its reference count,
 /// and if it reaches zero, delete it from there and the hash table.
-void unreferenceBlock(BlockIndex bi)
+void unreferenceBlock(BlockRef bi)
 {
 	final switch (bi.type)
 	{
-		case BlockIndex.Type.unknown:
+		case BlockRef.Type.unknown:
 			return; // No problem, we never even looked at it
-		case BlockIndex.Type.upstream:
+		case BlockRef.Type.upstream:
 			return; // No problem, it is on an upstream device (infinite lifetime)
-		case BlockIndex.Type.cow:
+		case BlockRef.Type.cow:
 		{
 			auto index = bi.cow;
 			assert(!cowMap[index].free);
@@ -528,7 +528,7 @@ void thincow(
 		return ptr[0 .. size];
 	}
 
-	auto blockMap = cast(BlockIndex[])mapFile(metadataDir, "blockmap", BlockIndex.sizeof, totalBlocks);
+	auto blockMap = cast(BlockRef[])mapFile(metadataDir, "blockmap", BlockRef.sizeof, totalBlocks);
 	foreach (ref dev; devs)
 	{
 		auto numBlocks = (dev.data.length + blockSize - 1) / blockSize;
@@ -537,7 +537,7 @@ void thincow(
 
 	auto hashTableLength = cast(ulong)(totalBlocks * hashTableRatio);
 	hashTableLength = hashTableLength.roundUpToPowerOfTwo;
-	hashTable = cast(BlockIndex[])mapFile(metadataDir, "hashtable", BlockIndex.sizeof, hashTableLength);
+	hashTable = cast(BlockRef[])mapFile(metadataDir, "hashtable", BlockRef.sizeof, hashTableLength);
 
 	auto maxCowBlocks = totalBlocks + 2; // Index 0 is reserved, and one more for swapping
 	cowMap = cast(COWIndex[])mapFile(metadataDir, "cowmap", COWIndex.sizeof, maxCowBlocks);
