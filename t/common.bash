@@ -17,7 +17,7 @@ while read -r what where _
 do
 	if [[ "$where" == "$test_dir_real"/* ]]
 	then
-		umount "$what" || true
+		fusermount -u "$where" || umount "$what" || true
 	fi
 done < /proc/mounts
 
@@ -36,7 +36,7 @@ while read -r what where _
 do
 	if [[ "$where" == "$test_dir_real"/* ]]
 	then
-		umount "$what"
+		fusermount -u "$where" || umount "$what"
 	fi
 done < /proc/mounts
 
