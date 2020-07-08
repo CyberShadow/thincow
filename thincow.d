@@ -12,6 +12,7 @@
  *   Vladimir Panteleev <vladimir@thecybershadow.net>
  */
 
+import core.stdc.errno;
 import core.sys.linux.sys.mman : MAP_ANONYMOUS;
 import core.sys.posix.fcntl;
 import core.sys.posix.sys.ioctl;
@@ -26,7 +27,7 @@ import std.path;
 import std.stdio;
 import std.string;
 
-import dfuse.fuse;
+import c.fuse.fuse;
 
 import ae.sys.file;
 import ae.utils.funopt;
@@ -48,13 +49,15 @@ struct BlockRef
 
 	long value;
 
+	string toString() const { return format("%s (%d)", type, value < 0 ? ~value : value); }
+
+nothrow @nogc:
 	@property Type type() const { return value == 0 ? Type.unknown : value < 0 ? Type.upstream : Type.cow; }
 	@property bool unknown() const { return type == Type.unknown; }
 	@property ulong upstream() const { assert(type == Type.upstream); return ~value; }
 	@property void upstream(ulong i) { value = ~i; assert(type == Type.upstream); }
 	@property ulong cow() const { assert(type == Type.cow); return value; }
 	@property void cow(ulong i) { value = i; assert(type == Type.cow); }
-	string toString() const { return format("%s (%d)", type, value < 0 ? ~value : value); }
 }
 
 /// Block size we're operating with
@@ -89,6 +92,7 @@ struct COWIndex
 
 	ulong value;
 
+nothrow @nogc:
 	@property Type type() const { return cast(Type)(value >> 62); }
 	@property bool free() const { return (value & (1L << 63)) == 0; } // type is lastBlock or nextFree
 
@@ -105,7 +109,7 @@ COWIndex[] cowMap;
 ubyte[] cowData;
 
 /// Hash some bytes.
-ulong hash(const(ubyte)[] block)
+ulong hash(const(ubyte)[] block) nothrow
 {
 	MurmurHash3!128 hash;
 	hash.start();
@@ -117,7 +121,7 @@ ulong hash(const(ubyte)[] block)
 /// Add a block to the hash table, so that we can find it later.
 /// Does nothing if the block is already in the hash table.
 /// `bi` indicates where the block's data can be found.
-BlockRef hashBlock(const(ubyte)[] block, BlockRef bi)
+BlockRef hashBlock(const(ubyte)[] block, BlockRef bi) nothrow
 {
 	assert(block.length == blockSize);
 
@@ -143,7 +147,7 @@ BlockRef hashBlock(const(ubyte)[] block, BlockRef bi)
 }
 
 /// Remove a block from the hash table.
-void unhashBlock(BlockRef bi)
+void unhashBlock(BlockRef bi) nothrow
 {
 	auto block = readBlock(bi);
 	assert(block.length == blockSize);
@@ -185,7 +189,7 @@ void unhashBlock(BlockRef bi)
 	}
 }
 
-const(ubyte)[] zeroExpand(const(ubyte)[] block)
+const(ubyte)[] zeroExpand(const(ubyte)[] block) nothrow
 {
 	if (block.length < blockSize)
 	{
@@ -201,7 +205,7 @@ const(ubyte)[] zeroExpand(const(ubyte)[] block)
 }
 
 /// Read a block from a device and a given address.
-const(ubyte)[] readBlock(Dev* dev, size_t blockIndex)
+const(ubyte)[] readBlock(Dev* dev, size_t blockIndex) nothrow
 {
 	auto bi = &dev.blockMap[blockIndex];
 	if (bi.unknown)
@@ -221,7 +225,7 @@ const(ubyte)[] readBlock(Dev* dev, size_t blockIndex)
 
 /// Read a block using its reference
 /// (either from upstream or our COW store).
-const(ubyte)[] readBlock(BlockRef bi)
+const(ubyte)[] readBlock(BlockRef bi) nothrow
 {
 	final switch (bi.type)
 	{
@@ -247,7 +251,7 @@ const(ubyte)[] readBlock(BlockRef bi)
 }
 
 /// Where the next block will go should it be added to the COW store.
-BlockRef getNextCow()
+BlockRef getNextCow() nothrow
 {
 	BlockRef result;
 	final switch (cowMap[0].type)
@@ -267,7 +271,7 @@ BlockRef getNextCow()
 }
 
 /// Write a block to a device and a given address.
-void writeBlock(Dev* dev, size_t blockIndex, const(ubyte)[] block)
+void writeBlock(Dev* dev, size_t blockIndex, const(ubyte)[] block) nothrow
 {
 	auto bi = &dev.blockMap[blockIndex];
 	unreferenceBlock(*bi);
@@ -299,7 +303,7 @@ void writeBlock(Dev* dev, size_t blockIndex, const(ubyte)[] block)
 }
 
 /// Indicates that we are now using one more reference to the given block.
-void referenceBlock(BlockRef bi)
+void referenceBlock(BlockRef bi) nothrow
 {
 	final switch (bi.type)
 	{
@@ -319,7 +323,7 @@ void referenceBlock(BlockRef bi)
 /// Indicates that we are no longer using one reference to the given block.
 /// If it was stored in the COW store, decrement its reference count,
 /// and if it reaches zero, delete it from there and the hash table.
-void unreferenceBlock(BlockRef bi)
+void unreferenceBlock(BlockRef bi) nothrow
 {
 	final switch (bi.type)
 	{
@@ -346,58 +350,64 @@ void unreferenceBlock(BlockRef bi)
 	}
 }
 
-class ThinCOWOperations : Operations
+Dev* getDev(const(char)[] path) nothrow
 {
-	private final Dev* getDev(const(char)[] path)
-	{
-		enforce(path.length && path[0] == '/', "Invalid path");
-		path = path[1..$];
-		foreach (ref dev; devs)
-			if (dev.name == path)
-				return &dev;
-		throw new Exception("No such device");
-	}
+	if (!path.length || path[0] != '/')
+		return null;
+	path = path[1..$];
+	foreach (ref dev; devs)
+		if (dev.name == path)
+			return &dev;
+	return null;
+}
 
-	override void getattr(const(char)[] path, ref stat_t s)
+extern(C) nothrow
+{
+	int fs_getattr(const char* c_path, stat_t* s)
 	{
+		auto path = c_path.fromStringz;
 		if (path == "/")
 			s.st_mode = S_IFDIR | S_IRWXU;
 		else
 		{
-			s.st_size = getDev(path).data.length;
+			auto dev = getDev(path);
+			if (!dev) return -ENOENT;
+			s.st_size = dev.data.length;
 			s.st_mode = S_IFREG | S_IRUSR | S_IWUSR;
 		}
 		s.st_mtime = 0;
 		s.st_uid = getuid();
 		s.st_gid = getgid();
+		return 0;
 	}
 
-	override bool access(const(char)[] path, int mode)
+	int fs_readdir(const char* c_path, void* buf,
+				fuse_fill_dir_t filler, off_t offset, fuse_file_info* fi)
 	{
-		if (path == "/")
-			return true;
-		try
-		{
-			getDev(path);
-			return true;
-		}
-		catch (Exception)
-			return false;
-	}
-
-	override string[] readdir(const(char)[] path)
-	{
-		enforce(path == "/", "No such directory");
-		string[] result;
+		auto path = c_path.fromStringz;
+		if (path != "/")
+			return -ENOENT;
 		foreach (ref dev; devs)
-			result ~= dev.name;
-		return result;
+			filler(buf, cast(char*)toStringz(dev.name), null, 0);
+		return 0;
 	}
 
-	override ulong read(const(char)[] path, ubyte[] buf, ulong offset)
+	int fs_open(const char* c_path, fuse_file_info* fi)
 	{
+		auto path = c_path.fromStringz;
 		auto dev = getDev(path);
-		auto end = min(offset + buf.length, dev.data.length);
+		if (!dev) return -ENOENT;
+		fi.direct_io = true;
+		fi.fh = cast(uint64_t)dev;
+		return 0;
+	}
+
+	int fs_read(const char* c_path, char* buf_ptr, size_t size, off_t offset, fuse_file_info* fi)
+	{
+		auto dev = cast(Dev*)fi.fh;
+		auto buf = (cast(ubyte*)buf_ptr)[0 .. size];
+
+		auto end = min(offset + size, dev.data.length);
 		if (offset >= end)
 			return 0;
 		auto head = buf.ptr;
@@ -413,13 +423,16 @@ class ThinCOWOperations : Operations
 			head += len;
 		}
 		// assert(head == buf.ptr + buf.length);
-		return end - offset;
+		return cast(int)(end - offset);
 	}
 
-	override int write(const(char)[] path, in ubyte[] data, ulong offset)
+	int fs_write(const char* c_path, char* data_ptr, size_t size,
+                            off_t offset, fuse_file_info* fi)
 	{
-		auto dev = getDev(path);
-		auto end = min(offset + data.length, dev.data.length);
+		auto dev = cast(Dev*)fi.fh;
+		auto data = (cast(ubyte*)data_ptr)[0 .. size];
+
+		auto end = min(offset + size, dev.data.length);
 		if (offset >= end)
 			return 0;
 		auto head = data.ptr;
@@ -543,9 +556,25 @@ void thincow(
 	cowMap = cast(COWIndex[])mapFile(metadataDir, "cowmap", COWIndex.sizeof, maxCowBlocks);
 	cowData = cast(ubyte[])mapFile(dataDir, "cowdata", blockSize, maxCowBlocks);
 
-	auto fs = new Fuse("thincow", foreground, false);
+	fuse_operations fsops;
+	fsops.readdir = &fs_readdir;
+	fsops.getattr = &fs_getattr;
+	fsops.open = &fs_open;
+	fsops.read = &fs_read;
+	fsops.write = &fs_write;
+
 	options ~= ["big_writes"]; // Essentially required, otherwise FUSE will use 4K writes and cause abysmal performance
-	fs.mount(new ThinCOWOperations(), target, options);
+
+	string[] args = ["thincow", target, "-o%-(%s,%)".format(options)];
+	args ~= "-s"; // single-threaded
+	if (foreground)
+		args ~= "-f";
+	auto c_args = new char*[args.length];
+	foreach (i, arg; args)
+		c_args[i] = cast(char*)arg.toStringz;
+	auto f_args = FUSE_ARGS_INIT(cast(int)c_args.length, c_args.ptr);
+
+	fuse_main(f_args.argc, f_args.argv, &fsops, null);
 }
 
 mixin main!(funopt!thincow);
