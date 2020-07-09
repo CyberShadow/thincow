@@ -54,7 +54,11 @@ mkdir -p "$test_dir"
 cd "$test_dir"
 mkdir data target upstream
 
+invocation=0
+
 function run_thincow() {
+	invocation=$((invocation+1))
+
 	# Build
 	if [[ $EUID != 0 ]]
 	then
@@ -108,7 +112,8 @@ function run_thincow() {
 }
 
 function stop_thincow() {
-	cp target/*.txt target/debug/*.txt ./
+	mkdir result-$invocation
+	cp target/*.txt target/debug/*.txt result-$invocation/
 	fusermount -u target
 	wait $fifo_pid
 }
