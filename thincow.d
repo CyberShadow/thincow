@@ -20,6 +20,7 @@ import core.sys.posix.sys.mman;
 import core.sys.posix.unistd;
 
 import std.algorithm.comparison;
+import std.array;
 import std.digest.murmurhash;
 import std.exception;
 import std.file;
@@ -768,6 +769,18 @@ enum FuseHandle : uint64_t
 /// so that their contents remains consistent throughout the file handle's lifetime.
 string[uint64_t] files;
 uint64_t nextFileIndex = FuseHandle.firstFile;
+
+uint64_t makeFile(alias fun)() nothrow
+{
+	Appender!string appender;
+	try
+		fun(appender);
+	catch (Exception e)
+		put(appender, e.toString().assertNotThrown());
+	auto fd = nextFileIndex++;
+	files[fd] = appender.data;
+	return fd;
+}
 
 extern(C) nothrow
 {
