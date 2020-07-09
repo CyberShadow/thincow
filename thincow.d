@@ -22,7 +22,7 @@ import core.sys.posix.unistd;
 import std.algorithm.comparison;
 import std.algorithm.iteration;
 import std.array;
-import std.digest.murmurhash;
+import std.digest.crc;
 import std.exception;
 import std.file;
 import std.format;
@@ -258,13 +258,15 @@ alias HashTableBucket = BlockRef[hashTableBucketLength];
 HashTableBucket[] hashTable;
 
 /// Hash some bytes.
-ulong hash(const(ubyte)[] block) nothrow
+alias Hash = uint;
+Hash hash(const(ubyte)[] block) nothrow
 {
-	MurmurHash3!128 hash;
+	CRC32 hash;
 	hash.start();
 	hash.put(block);
 	auto result = hash.finish();
-	return *cast(ulong*)result.ptr;
+	static assert(Hash.sizeof <= result.length);
+	return *cast(Hash*)result.ptr;
 }
 
 /// Add a block to the hash table, so that we can find it later.
@@ -1233,6 +1235,7 @@ void thincow(
 	auto hashTableLength = hashTableSize / HashTableBucket.sizeof;
 	enforce(hashTableLength * HashTableBucket.sizeof == hashTableSize, "Hash table size must be a multiple of %s".format(HashTableBucket.sizeof));
 	enforce(hashTableLength == hashTableLength.roundUpToPowerOfTwo, "Hash table size must be a power of 2");
+	enforce(hashTableLength <= 0x1_0000_0000, "Hash table is too large");
 	hashTable = cast(HashTableBucket[])mapFile(metadataDir, "hashtable", HashTableBucket.sizeof, hashTableLength);
 
 	auto maxCowBlocks = totalBlocks + 2; // Index 0 is reserved, and one more for swapping
