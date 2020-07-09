@@ -729,6 +729,15 @@ void unreferenceBlock(BlockRef br) nothrow
 // *****************************************************************************
 // FUSE implementation
 
+enum FuseHandle : uint64_t
+{
+	none,
+	rootDir,
+	devsDir,
+
+	firstDevice = 0x10000000_00000000,
+}
+
 extern(C) nothrow
 {
 	int fs_getattr(const char* c_path, stat_t* s)
@@ -752,13 +761,12 @@ extern(C) nothrow
 		return 0;
 	}
 
-	int fs_readdir(const char* c_path, void* buf,
+	int fs_readdir(const char* path, void* buf,
 				fuse_fill_dir_t filler, off_t /*offset*/, fuse_file_info* fi)
 	{
-		auto path = c_path.fromStringz;
-		switch (path)
+		switch (fi.fh)
 		{
-			case "/":
+			case FuseHandle.rootDir:
 			{
 				static immutable char*[] rootDir = [
 					"devs",
@@ -767,84 +775,111 @@ extern(C) nothrow
 					filler(buf, cast(char*)d, null, 0);
 				return 0;
 			}
-			case "/devs":
+			case FuseHandle.devsDir:
 				foreach (ref dev; devs)
 					filler(buf, cast(char*)toStringz(dev.name), null, 0);
 				return 0;
 			default:
-				return -ENOENT;
+				return -ENOTDIR;
 		}
 	}
 
 	int fs_open(const char* c_path, fuse_file_info* fi)
 	{
 		auto path = c_path.fromStringz;
-		auto dev = getDev(path);
-		if (!dev) return -ENOENT;
-		fi.direct_io = true;
-		fi.fh = cast(uint64_t)dev;
-		return 0;
-	}
-
-	int fs_read(const char* c_path, char* buf_ptr, size_t size, off_t offset, fuse_file_info* fi)
-	{
-		auto dev = cast(Dev*)fi.fh;
-		auto buf = (cast(ubyte*)buf_ptr)[0 .. size];
-
-		auto end = min(offset + size, dev.data.length);
-		if (offset >= end)
-			return 0;
-		auto head = buf.ptr;
-		foreach (blockOffset; offset / blockSize .. (end - 1) / blockSize + 1)
+		switch (path)
 		{
-			auto block = dev.readBlock(blockOffset);
-			auto blockStart = blockOffset * blockSize;
-			auto blockEnd = blockStart + blockSize;
-			auto spanStart = max(blockStart, offset);
-			auto spanEnd   = min(blockEnd  , end);
-			auto len = spanEnd - spanStart;
-			head[0 .. len] = block[spanStart - blockStart .. spanEnd - blockStart];
-			head += len;
+			case "/":
+				fi.fh = FuseHandle.rootDir;
+				return 0;
+			case "/devs":
+				fi.fh = FuseHandle.devsDir;
+				return 0;
+			default:
+				if (path.startsWith("/devs/"))
+				{
+					auto dev = getDev(path);
+					if (!dev) return -ENOENT;
+					auto devIndex = dev - devs.ptr;
+					fi.direct_io = true;
+					fi.fh = FuseHandle.firstDevice + devIndex;
+					return 0;
+				}
+				return -ENOENT;
 		}
-		// assert(head == buf.ptr + buf.length);
-		return cast(int)(end - offset);
 	}
 
-	int fs_write(const char* c_path, char* data_ptr, size_t size,
+	int fs_read(const char* /*path*/, char* buf_ptr, size_t size, off_t offset, fuse_file_info* fi)
+	{
+		if (fi.fh >= FuseHandle.firstDevice)
+		{
+			auto devIndex = fi.fh - FuseHandle.firstDevice;
+			if (devIndex >= devs.length) return -EBADFD;
+			auto dev = &devs[devIndex];
+
+			auto buf = (cast(ubyte*)buf_ptr)[0 .. size];
+			auto end = min(offset + size, dev.data.length);
+			if (offset >= end)
+				return 0;
+			auto head = buf.ptr;
+			foreach (blockOffset; offset / blockSize .. (end - 1) / blockSize + 1)
+			{
+				auto block = dev.readBlock(blockOffset);
+				auto blockStart = blockOffset * blockSize;
+				auto blockEnd = blockStart + blockSize;
+				auto spanStart = max(blockStart, offset);
+				auto spanEnd   = min(blockEnd  , end);
+				auto len = spanEnd - spanStart;
+				head[0 .. len] = block[spanStart - blockStart .. spanEnd - blockStart];
+				head += len;
+			}
+			// assert(head == buf.ptr + buf.length);
+			return cast(int)(end - offset);
+		}
+		return -EBADFD;
+	}
+
+	int fs_write(const char* /*path*/, char* data_ptr, size_t size,
                             off_t offset, fuse_file_info* fi)
 	{
-		auto dev = cast(Dev*)fi.fh;
-		auto data = (cast(ubyte*)data_ptr)[0 .. size];
-
-		auto end = min(offset + size, dev.data.length);
-		if (offset >= end)
-			return 0;
-		auto head = data.ptr;
-		foreach (blockOffset; offset / blockSize .. (end - 1) / blockSize + 1)
+		if (fi.fh >= FuseHandle.firstDevice)
 		{
-			auto blockStart = blockOffset * blockSize;
-			auto blockEnd = blockStart + blockSize;
-			auto spanStart = max(blockStart, offset);
-			auto spanEnd   = min(blockEnd  , end);
-			auto len = spanEnd - spanStart;
-			if (len == blockSize)
+			auto devIndex = fi.fh - FuseHandle.firstDevice;
+			if (devIndex >= devs.length) return -EBADFD;
+			auto dev = &devs[devIndex];
+
+			auto data = (cast(ubyte*)data_ptr)[0 .. size];
+			auto end = min(offset + size, dev.data.length);
+			if (offset >= end)
+				return 0;
+			auto head = data.ptr;
+			foreach (blockOffset; offset / blockSize .. (end - 1) / blockSize + 1)
 			{
-				// Write the whole block
-				dev.writeBlock(blockOffset, head[0 .. blockSize]);
+				auto blockStart = blockOffset * blockSize;
+				auto blockEnd = blockStart + blockSize;
+				auto spanStart = max(blockStart, offset);
+				auto spanEnd   = min(blockEnd  , end);
+				auto len = spanEnd - spanStart;
+				if (len == blockSize)
+				{
+					// Write the whole block
+					dev.writeBlock(blockOffset, head[0 .. blockSize]);
+				}
+				else
+				{
+					// Read-modify-write
+					static ubyte[] buf;
+					if (!buf.length)
+						buf.length = blockSize;
+					buf[] = dev.readBlock(blockOffset);
+					buf[spanStart - blockStart .. spanEnd - blockStart] = head[0 .. len];
+					dev.writeBlock(blockOffset, buf[]);
+				}
+				head += len;
 			}
-			else
-			{
-				// Read-modify-write
-				static ubyte[] buf;
-				if (!buf.length)
-					buf.length = blockSize;
-				buf[] = dev.readBlock(blockOffset);
-				buf[spanStart - blockStart .. spanEnd - blockStart] = head[0 .. len];
-				dev.writeBlock(blockOffset, buf[]);
-			}
-			head += len;
+			return cast(int)(end - offset);
 		}
-		return cast(int)(end - offset);
+		return -EBADFD;
 	}
 }
 
@@ -957,8 +992,11 @@ void thincow(
 	fsops.readdir = &fs_readdir;
 	fsops.getattr = &fs_getattr;
 	fsops.open = &fs_open;
+	fsops.opendir = &fs_open;
 	fsops.read = &fs_read;
 	fsops.write = &fs_write;
+	fsops.flag_nullpath_ok = 1;
+	fsops.flag_nopath = 1;
 
 	options ~= ["big_writes"]; // Essentially required, otherwise FUSE will use 4K writes and cause abysmal performance
 
