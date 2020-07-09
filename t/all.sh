@@ -1,6 +1,8 @@
 #!/bin/bash
 set -eu
 
+cd "$(dirname "$0")"
+
 rm -rf tmp/cov
 mkdir -p tmp/cov
 export THINCOW_COV=1
