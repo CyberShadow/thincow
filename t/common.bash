@@ -108,6 +108,7 @@ function run_thincow() {
 }
 
 function stop_thincow() {
+	cp target/debug/*.txt ./
 	fusermount -u target
 	wait $fifo_pid
 }
