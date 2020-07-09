@@ -7,10 +7,10 @@ source common.bash
 run_thincow
 ( yes || true ) | dd of=target/test bs=$block_size count=16 status=none conv=notrunc
 fusermount -u target
-diff -u <(get_usage data/cowdata) /dev/stdin <<< $((1 * block_size))
+test "$(get_usage data/cowdata)" -le $((2 * block_size))
 
 # Delete pattern (test unreferencing and unhashing)
 run_thincow
 dd if=/dev/zero of=target/test bs=1M count=1 status=none conv=notrunc
 fusermount -u target
-diff -u <(get_usage data/cowdata) /dev/stdin <<< $((2 * block_size))
+test "$(get_usage data/cowdata)" -le $((3 * block_size))
