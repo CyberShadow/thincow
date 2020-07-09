@@ -3,7 +3,7 @@ source common.bash
 
 # Test that thincow deduplicates many identical blocks to one.
 
-dd if=/dev/urandom of=upstream/test bs=1M count=1 status=none
+( seq 1e99 || true ) | dd iflag=fullblock of=upstream/test bs=1M count=1 status=none
 run_thincow
 ( yes || true ) | dd of=target/test bs=1M count=1 status=none conv=notrunc
 fusermount -u target

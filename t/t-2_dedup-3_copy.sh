@@ -3,7 +3,7 @@ source common.bash
 
 # Test that thincow deduplicates data copied from one place to another, with no extra disk usage.
 
-dd if=/dev/urandom of=upstream/test bs=1M count=1 status=none
+( seq 1e99 || true ) | dd iflag=fullblock of=upstream/test bs=1M count=1 status=none
 run_thincow
 dd if=target/test of=target/test bs=512K seek=1 count=1 status=none conv=notrunc
 fusermount -u target
