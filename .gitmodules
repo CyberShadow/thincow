@@ -1,0 +1,6 @@
+[submodule "ae"]
+	path = lib/ae
+	url = https://github.com/CyberShadow/ae.git
+[submodule "dfuse"]
+	path = lib/dfuse
+	url = https://github.com/CyberShadow/dfuse.git
