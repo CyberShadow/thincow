@@ -3,7 +3,7 @@ set -eEuo pipefail
 test_name=$(basename "$0" .sh)
 test_dir=tmp/$test_name
 
-block_size=$((64*1024))
+block_size=4096
 
 root=$(dirname "$PWD")
 

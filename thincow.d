@@ -36,77 +36,107 @@ import ae.utils.math;
 
 __gshared: // disable TLS
 
+/// Host memory layout (assume typical x86_64 CPU)
+enum cacheLineSize = size_t(64);
+enum pageSize = size_t(4096);
+
+/// Indicates an index of a block in a virtual (FUSE) device.
+alias BlockIndex = ulong;
+
+/// Indicates the index of a B-tree node within the B-tree block storage
+/// (similar to a pointer to a B-tree node).
+alias BTreeBlockIndex = ulong;
+
 /// Block reference. Can refer to a block on an upstream device, or in the COW store, or nothing.
 /// Used in the hash table and block map.
 struct BlockRef
 {
-	enum Type
+	enum Type : ubyte
 	{
-		unknown,  /// in block map, never yet read or written; in hash table, free cell
+		unknown,  /// in hash table, free cell
 		upstream, /// references a data block on an upstream device
 		cow,      /// references a data block in our COW store (1-based index)
 	}
 
-	long value;
+	ulong value;
 
-	string toString() const { return format("%s (%d)", type, value < 0 ? ~value : value); }
+	string toString() const { return format("%s(%d)", type, offset); }
 
 nothrow @nogc:
-	@property Type type() const { return value == 0 ? Type.unknown : value < 0 ? Type.upstream : Type.cow; }
+	this(Type type, ulong offset) { value = offset | (ulong(type) << 62); assert(this.type == type && this.offset == offset); }
+	@property Type type() const { return cast(Type)(value >> 62); }
+	@property ulong offset() const { return value & ((1L << 62) - 1); }
+
 	@property bool unknown() const { return type == Type.unknown; }
-	@property ulong upstream() const { assert(type == Type.upstream); return ~value; }
-	@property void upstream(ulong i) { value = ~i; assert(type == Type.upstream); }
-	@property ulong cow() const { assert(type == Type.cow); return value; }
-	@property void cow(ulong i) { value = i; assert(type == Type.cow); }
+	@property ulong upstream() const { assert(type == Type.upstream); return offset; }
+	@property void upstream(ulong i) { this = BlockRef(Type.upstream, i); }
+	@property ulong cow() const { assert(type == Type.cow); return offset; }
+	@property void cow(ulong i) { this = BlockRef(Type.cow, i); }
+
+	BlockRef opBinary(string op : "+")(ulong o) const { BlockRef r; r.value = value + o; assert(r.type == this.type); return r; }
 }
 
 /// Block size we're operating with
 size_t blockSize;
 
-/// Hash -> block lookup
-BlockRef[] hashTable;
+/// Total number of blocks
+BlockIndex totalBlocks;
+
+/// These variables are persistent.
+struct Globals
+{
+	/// Number of allocated B-tree nodes so far.
+	BTreeBlockIndex btreeLength;
+	/// B-tree node index of the root node.
+	BTreeBlockIndex btreeRoot;
+}
+Globals* globals;
+
+// *****************************************************************************
+// Devices
 
 /// Per-device (file) information
 struct Dev
 {
 	/// Memory mapped upstream device
 	const(ubyte)[] data;
-	/// Represents contents of the device we present via FUSE
-	BlockRef[] blockMap;
 	/// First block index within the global block map
-	size_t firstBlock;
+	BlockIndex firstBlock;
 	/// File name of the device (in the upstream directory, and in the FUSE filesystem)
 	string name;
 }
 Dev[] devs;
 
-/// COW block index
-struct COWIndex
+/// Find device containing the given BlockIndex.
+ref Dev findDev(BlockIndex blockIndex) nothrow
 {
-	enum Type : ubyte
-	{
-		lastBlock,  /// free - how many blocks have been allocated so far, includes zero
-		nextFree,   /// free - index to next free block
-		refCount,   /// used - number of references to this block
-	}
-
-	ulong value;
-
-nothrow @nogc:
-	@property Type type() const { return cast(Type)(value >> 62); }
-	@property bool free() const { return (value & (1L << 63)) == 0; } // type is lastBlock or nextFree
-
-	@property size_t lastBlock() const { assert(type == Type.lastBlock); return value & ((1L << 62) - 1); }
-	@property void lastBlock(size_t i) { value = i | (ulong(Type.lastBlock) << 62); assert(type == Type.lastBlock); }
-	@property size_t nextFree() const { assert(type == Type.nextFree); return value & ((1L << 62) - 1); }
-	@property void nextFree(size_t i) { value = i | (ulong(Type.nextFree) << 62); assert(type == Type.nextFree); }
-	@property size_t refCount() const { assert(type == Type.refCount); return value & ((1L << 62) - 1); }
-	@property void refCount(size_t i) { value = i | (ulong(Type.refCount) << 62); assert(type == Type.refCount); }
+	// TODO: this could be a binary search
+	foreach (i, ref dev; devs)
+		if (dev.firstBlock > blockIndex)
+			return devs[i-1];
+	return devs[$-1];
 }
-/// Our lookup for COW blocks
-COWIndex[] cowMap;
-/// The raw storage for COW data (data which does not exist on upstream devices)
-ubyte[] cowData;
+
+/// Find device by path.
+Dev* getDev(const(char)[] path) nothrow
+{
+	if (!path.length || path[0] != '/')
+		return null;
+	path = path[1..$];
+	foreach (ref dev; devs)
+		if (dev.name == path)
+			return &dev;
+	return null;
+}
+
+// *****************************************************************************
+// Hash table
+
+/// Hash -> block lookup
+enum hashTableBucketSize = cacheLineSize; // in bytes
+enum hashTableBucketLength = hashTableBucketSize / BlockRef.sizeof;
+alias HashTableBucket = BlockRef[hashTableBucketLength];
+HashTableBucket[] hashTable;
 
 /// Hash some bytes.
 ulong hash(const(ubyte)[] block) nothrow
@@ -120,74 +150,409 @@ ulong hash(const(ubyte)[] block) nothrow
 
 /// Add a block to the hash table, so that we can find it later.
 /// Does nothing if the block is already in the hash table.
-/// `bi` indicates where the block's data can be found.
-BlockRef hashBlock(const(ubyte)[] block, BlockRef bi) nothrow
+/// `br` indicates where the block's data can be found.
+/// Returns the BlockRef that was found in or added to the hash table.
+BlockRef hashBlock(const(ubyte)[] block, BlockRef br) nothrow
 {
 	assert(block.length == blockSize);
 
-	auto h = hash(block) % hashTable.length;
-	while (true)
-	{
-		auto e = &hashTable[h];
-		if (e.unknown)
+	auto bucketIndex = hash(block) % hashTable.length;
+	auto bucket = hashTable[bucketIndex][];
+
+	// First, check if the block ref is already in this bucket
+	foreach (i, hbr; bucket)
+		if (hbr.unknown)
+			break;
+		else
+		if (hbr == br)
 		{
-			// Free cell (new entry)
-			*e = bi;
-			return *e;
+			// Exact hit - move to front
+			foreach_reverse (j; 0 .. i)
+				bucket[j + 1] = bucket[j];
+			return bucket[0] = hbr;
 		}
 
-		if (block == readBlock(*e))
+	// Next, check if one of the blocks has the same contents
+	auto end = hashTableBucketLength - 1;
+	foreach (i, hbr; bucket)
+		if (hbr.unknown)
 		{
-			// Cache hit
-			return *e;
+			// Free cell - stop here
+			end = i;
+			break;
+		}
+		else
+		if (block == readBlock(hbr))
+		{
+			// Cache hit - move to front
+			foreach_reverse (j; 0 .. i)
+				bucket[j + 1] = bucket[j];
+			return bucket[0] = hbr;
 		}
 
-		h = (h + 1) % hashTable.length; // Keep looking
-	}
+	// Add to front
+	foreach_reverse (j; 0 .. end)
+		bucket[j + 1] = bucket[j];
+	return bucket[0] = br;
 }
 
 /// Remove a block from the hash table.
-void unhashBlock(BlockRef bi) nothrow
+void unhashBlock(BlockRef br) nothrow
 {
-	auto block = readBlock(bi);
+	auto block = readBlock(br);
 	assert(block.length == blockSize);
 
-	auto i = hash(block) % hashTable.length;
-	while (true)
+	auto bucketIndex = hash(block) % hashTable.length;
+	auto bucket = hashTable[bucketIndex][];
+	foreach (i, hbr; bucket)
 	{
-		auto e = &hashTable[i];
-		if (e.unknown)
-			assert(false, "Can't find entry to unhash");
+		if (hbr.unknown)
+			return;
 
-		if (*e == bi)
+		if (hbr == br)
 		{
-			assert(block == readBlock(*e), "Matched BlockRef but not data in hash table");
-			assert(e.type == BlockRef.Type.cow, "Unhashing non-COW block");
-			break;
+			assert(block == readBlock(hbr), "Matched BlockRef but not data in hash table");
+			assert(hbr.type == BlockRef.Type.cow, "Unhashing non-COW block");
+			// Remove
+			foreach (j; i + 1 .. hashTableBucketLength)
+			{
+				bucket[j - 1] = bucket[j];
+				if (bucket[j].unknown)
+					break;
+			}
+			bucket[hashTableBucketLength - 1] = BlockRef.init;
+			return;
 		}
-
-		i = (i + 1) % hashTable.length;
-	}
-
-	// Standard erasing algorithm for open-addressing hash tables
-	auto j = i;
-	while (true)
-	{
-		hashTable[i] = BlockRef.init;
-		ulong k;
-		do
-		{
-			j = (j + 1) % hashTable.length;
-			if (hashTable[j].unknown)
-				return;
-			k = hash(readBlock(hashTable[j])) % hashTable.length;
-		} while (i <= j
-			? i < k && k <= j
-			: i < k || k <= j);
-		hashTable[i] = hashTable[j];
-		i = j;
 	}
 }
+
+// *****************************************************************************
+// Block allocation B-tree
+
+/// Block map B-tree element, representing one extent
+struct BTreeElement
+{
+	/// Block index of the first block of this element (B-tree key)
+	/// Not used for the first element within a node, as this is implicit.
+	BlockIndex firstBlockIndex;
+
+	/// Interpretation depends on BTreeNode.isLeaf:
+	union
+	{
+		/// For leaf nodes:
+		/// Block index pointing to the first block in the range
+		BlockRef firstBlockRef;
+		/// For non-leaf nodes:
+		/// B-tree node index of child
+		BTreeBlockIndex childIndex;
+	}
+}
+
+/*
+ implicit              .              implicit
+     |                 .                 |
+     |    key   key    .    key   key    |
+     |     |     |     .     |     |     |
+     | ptr | ptr | ptr . ptr | ptr | ptr |
+*/
+
+enum btreeNodeSize = pageSize;
+enum btreeNodeLength = btreeNodeSize / BTreeElement.sizeof;
+union BTreeNode
+{
+	/// A B-tree node with N nodes has N-1 keys.
+	/// Take advantage of this and store metadata where the key for
+	/// element 0 would be otherwise.
+	struct
+	{
+		uint count;  /// Number of keys in this B-tree node (1 - number of elements)
+		bool isLeaf; /// Is this B-tree node a leaf node?
+	}
+	BTreeElement[btreeNodeLength] elems;
+
+	/// Return the element index (within `this.elems`)
+	/// containing the given `blockIndex`.
+	size_t find(BlockIndex blockIndex) const nothrow @nogc
+	{
+		size_t start = 0, end = 1 + count;
+		while (start + 1 < end)
+		{
+			auto mid = (start + end) / 2;
+			if (blockIndex < elems[mid].firstBlockIndex)
+				end = mid;
+			else
+				start = mid;
+		}
+		return start;
+	}
+}
+
+BTreeNode[/*BTreeBlockIndex*/] blockMap;
+
+debug(btree) void dumpBtree()
+{
+	void dump(BTreeBlockIndex nodeIndex)
+	{
+		stderr.writef(" @%d{", nodeIndex);
+		auto node = &blockMap[nodeIndex];
+		foreach (i; 0 .. node.count + 1)
+		{
+			if (i)
+				stderr.write(" ^", node.elems[i].firstBlockIndex);
+			if (node.isLeaf)
+				stderr.write(" ", node.elems[i].firstBlockRef);
+			else
+				dump(node.elems[i].childIndex);
+		}
+		stderr.write(" }");
+	}
+	stderr.write("btree: ^0");
+	dump(globals.btreeRoot);
+	stderr.writeln(" ^", totalBlocks);
+}
+
+/// Read the block map B-tree and return the BlockRef corresponding to the given BlockIndex.
+BlockRef getBlockRef(BlockIndex blockIndex) nothrow @nogc
+{
+	static BlockRef search(ref BTreeNode node, BlockIndex blockIndex, BlockIndex start, BlockIndex end) nothrow @nogc
+	{
+		if (node.count > 0)
+		{
+			assert(node.elems[1].firstBlockIndex > start);
+			assert(node.elems[node.count].firstBlockIndex < end);
+		}
+
+		auto elemIndex = node.find(blockIndex);
+		auto elem = &node.elems[elemIndex];
+		auto elemStart = elemIndex ? elem.firstBlockIndex : start;
+		auto elemEnd = elemIndex < node.count ? node.elems[elemIndex + 1].firstBlockIndex : end;
+		if (node.isLeaf)
+		{
+			auto offset = blockIndex - elemStart;
+			return elem.firstBlockRef + offset;
+		}
+		else
+			return search(blockMap[elem.childIndex], blockIndex, elemStart, elemEnd);
+	}
+
+	return search(blockMap[globals.btreeRoot], blockIndex, 0, totalBlocks);
+}
+
+/// Write to the block map B-tree and set the given BlockIndex to the given BlockRef.
+void putBlockRef(BlockIndex blockIndex, BlockRef blockRef) nothrow @nogc
+{
+	debug(btree) assertNotThrown({ stderr.write(">>> putBlockRef before: "); dumpBtree(); }());
+	static void splitNode(ref BTreeNode parent, size_t childElemIndex)
+	{
+		assert(!parent.isLeaf);
+		assert(parent.count + 1 < btreeNodeLength);
+		auto leftIndex = parent.elems[childElemIndex].childIndex;
+		auto leftNode = &blockMap[leftIndex];
+		auto rightIndex = globals.btreeLength++;
+		auto rightNode = &blockMap[rightIndex];
+		assert(rightNode.count == 0);
+		auto pivotElemIndex = (leftNode.count + 1) / 2;
+		assert(pivotElemIndex > 0);
+		auto pivot = leftNode.elems[pivotElemIndex].firstBlockIndex;
+		// Move nodes from left to right
+		foreach (i; pivotElemIndex .. leftNode.count + 1)
+			rightNode.elems[i - pivotElemIndex] = leftNode.elems[i];
+		// Fix right node's metadata
+		rightNode.elems[0].firstBlockIndex = 0;
+		rightNode.isLeaf = leftNode.isLeaf;
+		rightNode.count = leftNode.count - pivotElemIndex;
+		// Update left node's metadata
+		leftNode.count = pivotElemIndex - 1;
+		// Insert new node in parent
+		foreach_reverse (i; childElemIndex .. parent.count + 1)
+			parent.elems[i + 1] = parent.elems[i];
+		parent.count++;
+		parent.elems[childElemIndex + 1].firstBlockIndex = pivot;
+		parent.elems[childElemIndex + 1].childIndex = rightIndex;
+		debug(btree) assertNotThrown({ stderr.write(">>> putBlockRef psplit: "); dumpBtree(); }());
+	}
+
+	/// Returns false if there was not enough room, and the parent needs splitting.
+	bool descend(ref BTreeNode node, BlockIndex start, BlockIndex end)
+	{
+		if (node.count > 0)
+		{
+			assert(node.elems[1].firstBlockIndex > start);
+			assert(node.elems[node.count].firstBlockIndex < end);
+		}
+
+		auto elemIndex = node.find(blockIndex);
+	retry:
+		auto elem = &node.elems[elemIndex];
+		auto elemStart = elemIndex ? elem.firstBlockIndex : start;
+		auto elemEnd = elemIndex < node.count ? node.elems[elemIndex + 1].firstBlockIndex : end;
+		auto offset = blockIndex - elemStart;
+		assert(blockIndex >= elemStart && blockIndex < elemEnd);
+		if (node.isLeaf)
+		{
+			if (blockIndex == elemStart) // Write to the beginning of the extent
+			{
+				if (elemIndex > 0 &&
+					elemStart == blockIndex &&
+					(){
+						auto pelemIndex = elemIndex - 1; // Previous element
+						auto pelem = &node.elems[elemIndex - 1];
+						auto pelemStart = pelemIndex ? pelem.firstBlockIndex : start;
+						auto pelemLength = elemStart - pelemStart;
+						auto extrapolatedPelemBlockRef = pelem.firstBlockRef + pelemLength;
+						return extrapolatedPelemBlockRef == blockRef;
+					}())
+				{
+					// Sequential write optimization - this block is a continuation of the previous extent.
+					// Simply move the boundary one block to the right
+					// (thus growing the extent on the left and shrinking the extent on the right).
+					elem.firstBlockIndex++;
+					elem.firstBlockRef = elem.firstBlockRef + 1;
+					if (elem.firstBlockIndex == elemEnd)
+					{
+						// Shrunk extent is now empty, remove it
+						foreach (i; elemIndex .. node.count)
+							node.elems[i] = node.elems[i + 1];
+						node.count--;
+					}
+					return true;
+				}
+				else
+				if (elemStart + 1 == elemEnd)
+				{
+					// Extent of length 1, just overwrite it
+					elem.firstBlockRef = blockRef;
+					return true;
+				}
+				else
+				{
+					// Split up the extent, on the left side
+					if (node.count + 1 == btreeNodeLength)
+						return false; // No room
+					foreach_reverse (i; elemIndex .. node.count + 1)
+						node.elems[i + 1] = node.elems[i];
+					node.count++;
+					auto nelem = &node.elems[elemIndex + 1];
+					nelem.firstBlockIndex = blockIndex + 1;
+					nelem.firstBlockRef = nelem.firstBlockRef + 1;
+					// Now that the extent is split up,
+					// `elem` points to an extent of length 1,
+					// so overwrite it as above.
+					elem.firstBlockRef = blockRef;
+					return true;
+				}
+			}
+			else
+			if (blockIndex + 1 == elemEnd) // Write to the end of the extent
+			{
+				// Split up the extent, on the right side
+				if (node.count + 1 == btreeNodeLength)
+					return false; // No room
+				foreach_reverse (i; elemIndex .. node.count + 1)
+					node.elems[i + 1] = node.elems[i];
+				node.count++;
+				// Create new 1-length extent, on the right side of the extent being split up
+				auto nelem = &node.elems[elemIndex + 1];
+				nelem.firstBlockIndex = blockIndex;
+				nelem.firstBlockRef = blockRef;
+				return true;
+			}
+			else // Write to the middle of an extent
+			{
+				if (node.count + 2 >= btreeNodeLength)
+					return false; // No room
+				foreach_reverse (i; elemIndex .. node.count + 1)
+					node.elems[i + 2] = node.elems[i];
+				node.count += 2;
+				auto nelem = &node.elems[elemIndex + 1];
+				nelem.firstBlockIndex = blockIndex;
+				nelem.firstBlockRef = blockRef;
+				auto n2elem = &node.elems[elemIndex + 2];
+				n2elem.firstBlockIndex = blockIndex + 1;
+				n2elem.firstBlockRef = n2elem.firstBlockRef + offset + 1;
+				return true;
+			}
+		}
+		else
+		{
+			if (!descend(blockMap[elem.childIndex], elemStart, elemEnd))
+			{
+				if (node.count + 1 == btreeNodeLength)
+					return false; // We ourselves don't have room. Split us up first
+				splitNode(node, elemIndex);
+				// Adjust blockIndex after splitting
+				if (blockIndex >= node.elems[elemIndex + 1].firstBlockIndex)
+					elemIndex++;
+				goto retry;
+			}
+			return true;
+		}
+	}
+
+	while (!descend(blockMap[globals.btreeRoot], 0, totalBlocks))
+	{
+		// First, allocate new root
+		auto newRootIndex = globals.btreeLength++;
+		auto newRoot = &blockMap[newRootIndex];
+		assert(newRoot.count == 0);
+		newRoot.elems[0].childIndex = globals.btreeRoot;
+		globals.btreeRoot = newRootIndex;
+		// Now split
+		splitNode(*newRoot, 0);
+	}
+
+	debug(btree) assertNotThrown({ stderr.write(">>> putBlockRef after : "); dumpBtree(); }());
+}
+
+// *****************************************************************************
+// COW store
+
+/// COW block index
+struct COWIndex
+{
+	enum Type : ubyte
+	{
+		lastBlock,  /// free - how many blocks have been allocated so far, includes zero
+		nextFree,   /// free - index to next free block
+		refCount,   /// used - number of references to this block
+	}
+
+	ulong value;
+
+	string toString() const { return format("%s(%d)", type, offset); }
+
+nothrow @nogc:
+	this(Type type, ulong offset) { value = offset | (ulong(type) << 62); assert(this.type == type && this.offset == offset); }
+	@property Type type() const { return cast(Type)(value >> 62); }
+	@property ulong offset() const { return value & ((1L << 62) - 1); }
+
+	@property bool free() const { return (value & (1L << 63)) == 0; } // type is lastBlock or nextFree
+	@property ulong lastBlock() const { assert(type == Type.lastBlock); return offset; }
+	@property void lastBlock(ulong i) { this = COWIndex(Type.lastBlock, i); }
+	@property ulong nextFree() const { assert(type == Type.nextFree); return offset; }
+	@property void nextFree(ulong i) { this = COWIndex(Type.nextFree, i); }
+	@property ulong refCount() const { assert(type == Type.refCount); return offset; }
+	@property void refCount(ulong i) { this = COWIndex(Type.refCount, i); }
+}
+/// Our lookup for COW blocks
+COWIndex[] cowMap;
+/// The raw storage for COW data (data which does not exist on upstream devices)
+ubyte[] cowData;
+
+debug(cow) void dumpCOW()
+{
+	stderr.write("cow:");
+	foreach (i, ci; cowMap)
+	{
+		stderr.writef(" %d:%s", i, ci);
+		if (ci == COWIndex.init)
+			break;
+	}
+	stderr.writeln();
+}
+
+// *****************************************************************************
+// I/O operations
 
 const(ubyte)[] zeroExpand(const(ubyte)[] block) nothrow
 {
@@ -205,46 +570,33 @@ const(ubyte)[] zeroExpand(const(ubyte)[] block) nothrow
 }
 
 /// Read a block from a device and a given address.
-const(ubyte)[] readBlock(Dev* dev, size_t blockIndex) nothrow
+const(ubyte)[] readBlock(Dev* dev, size_t devBlockIndex) nothrow
 {
-	auto bi = &dev.blockMap[blockIndex];
-	if (bi.unknown)
-	{
-		// We've never looked at this block before,
-		// so add it to our hash table,
-		// and make it refer to itself.
-		bi.upstream = dev.firstBlock + blockIndex;
-		auto offset = blockIndex * blockSize;
-		auto block = dev.data[offset .. min(offset + blockSize, $)].zeroExpand;
-		hashBlock(block, *bi);
-		return block;
-	}
-	else
-		return readBlock(*bi);
+	BlockIndex blockIndex = dev.firstBlock + devBlockIndex;
+	auto br = getBlockRef(blockIndex);
+	auto block = readBlock(br);
+	hashBlock(block, br);
+	return block;
 }
 
 /// Read a block using its reference
 /// (either from upstream or our COW store).
-const(ubyte)[] readBlock(BlockRef bi) nothrow
+const(ubyte)[] readBlock(BlockRef br) nothrow
 {
-	final switch (bi.type)
+	final switch (br.type)
 	{
 		case BlockRef.Type.unknown:
 			assert(false);
 		case BlockRef.Type.upstream:
 		{
-			auto index = bi.upstream;
-			foreach (ref dev2; devs)
-				if (dev2.firstBlock <= index && dev2.firstBlock + dev2.blockMap.length > index)
-				{
-					auto offset = (index - dev2.firstBlock) * blockSize;
-					return dev2.data[offset .. min(offset + blockSize, $)].zeroExpand;
-				}
-			assert(false, "Out-of-range upstream block index");
+			auto index = br.upstream;
+			auto dev = &findDev(index);
+			auto offset = (index - dev.firstBlock) * blockSize;
+			return dev.data[offset .. min(offset + blockSize, $)].zeroExpand;
 		}
 		case BlockRef.Type.cow:
 		{
-			auto offset = bi.cow * blockSize;
+			auto offset = br.cow * blockSize;
 			return cowData[offset .. offset + blockSize];
 		}
 	}
@@ -271,10 +623,10 @@ BlockRef getNextCow() nothrow
 }
 
 /// Write a block to a device and a given address.
-void writeBlock(Dev* dev, size_t blockIndex, const(ubyte)[] block) nothrow
+void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 {
-	auto bi = &dev.blockMap[blockIndex];
-	unreferenceBlock(*bi);
+	BlockIndex blockIndex = dev.firstBlock + devBlockIndex;
+	unreferenceBlock(getBlockRef(blockIndex));
 
 	auto nextCow = getNextCow();
 	auto result = hashBlock(block, nextCow);
@@ -283,6 +635,7 @@ void writeBlock(Dev* dev, size_t blockIndex, const(ubyte)[] block) nothrow
 		// New block - add to COW store
 		auto offset = result.cow * blockSize;
 		cowData[offset .. offset + block.length] = block;
+		debug(cow) stderr.writefln(">> new: block %s [%(%02X %)]", result, block[0 .. 8]).assertNotThrown;
 		final switch (cowMap[0].type)
 		{
 			case COWIndex.Type.lastBlock:
@@ -296,16 +649,17 @@ void writeBlock(Dev* dev, size_t blockIndex, const(ubyte)[] block) nothrow
 				assert(false);
 		}
 		cowMap[result.cow].refCount = 1;
+		debug(cow) assertNotThrown({ stderr.write(">>> after writeBlock: "); dumpCOW(); }());
 	}
 	else
 		referenceBlock(result);
-	*bi = result;
+	putBlockRef(blockIndex, result);
 }
 
 /// Indicates that we are now using one more reference to the given block.
-void referenceBlock(BlockRef bi) nothrow
+void referenceBlock(BlockRef br) nothrow
 {
-	final switch (bi.type)
+	final switch (br.type)
 	{
 		case BlockRef.Type.unknown:
 			assert(false);
@@ -313,19 +667,23 @@ void referenceBlock(BlockRef bi) nothrow
 			return; // No problem, it is on an upstream device (infinite lifetime)
 		case BlockRef.Type.cow:
 		{
-			auto index = bi.cow;
+			auto index = br.cow;
 			assert(!cowMap[index].free);
-			cowMap[index].refCount = cowMap[index].refCount + 1;
+			auto refCount = cowMap[index].refCount;
+			debug(cow) stderr.writefln(">> reference: block %s [%(%02X %)] refcount %d -> %d",
+					br, readBlock(br)[0 .. 8], refCount, refCount+1).assertNotThrown;
+			cowMap[index].refCount = refCount + 1;
 		}
+		debug(cow) assertNotThrown({ stderr.write(">>> after referenceBlock: "); dumpCOW(); }());
 	}
 }
 
 /// Indicates that we are no longer using one reference to the given block.
 /// If it was stored in the COW store, decrement its reference count,
 /// and if it reaches zero, delete it from there and the hash table.
-void unreferenceBlock(BlockRef bi) nothrow
+void unreferenceBlock(BlockRef br) nothrow
 {
-	final switch (bi.type)
+	final switch (br.type)
 	{
 		case BlockRef.Type.unknown:
 			return; // No problem, we never even looked at it
@@ -333,33 +691,28 @@ void unreferenceBlock(BlockRef bi) nothrow
 			return; // No problem, it is on an upstream device (infinite lifetime)
 		case BlockRef.Type.cow:
 		{
-			auto index = bi.cow;
+			auto index = br.cow;
 			assert(!cowMap[index].free);
 			auto refCount = cowMap[index].refCount;
 			assert(refCount > 0);
+			debug(cow) stderr.writefln(">> unreference: block %s [%(%02X %)] refcount %d -> %d",
+					br, readBlock(br)[0 .. 8], refCount, refCount-1).assertNotThrown;
 			refCount--;
 			if (refCount == 0)
 			{
-				unhashBlock(bi);
+				unhashBlock(br);
 				cowMap[index] = cowMap[0];
 				cowMap[0].nextFree = index;
 			}
 			else
 				cowMap[index].refCount = refCount;
+			debug(cow) assertNotThrown({ stderr.write(">>> after unreferenceBlock: "); dumpCOW(); }());
 		}
 	}
 }
 
-Dev* getDev(const(char)[] path) nothrow
-{
-	if (!path.length || path[0] != '/')
-		return null;
-	path = path[1..$];
-	foreach (ref dev; devs)
-		if (dev.name == path)
-			return &dev;
-	return null;
-}
+// *****************************************************************************
+// FUSE implementation
 
 extern(C) nothrow
 {
@@ -464,14 +817,17 @@ extern(C) nothrow
 	}
 }
 
+// *****************************************************************************
+// Entry point
+
 @(`Create a deduplicated, COW view of block devices as a FUSE filesystem.`)
 void thincow(
 	Parameter!(string, "Where to mount the FUSE filesystem.") target,
 	Option!(string, "Directory containing upstream devices/symlinks.", "PATH") upstream,
 	Option!(string, "Directory where to store COW blocks.", "PATH") dataDir,
 	Option!(string, "Directory where to store metadata.\nIf unspecified, defaults to the data directory.\nSpecify - to use RAM.", "PATH") metadataDir = null,
-	Option!(size_t, "Block size. Larger blocks means smaller metadata,\nbut writes smaller than one block\nwill cause a read-modify-write.\nThe default is 65536 (64 KiB).", "BYTES") blockSize = 64*1024,
-	Option!(double, "Ratio to calculate hash table size\n(from upstream block count).\nThe default is 2.0.") hashTableRatio = 2.0,
+	Option!(size_t, "Block size. Larger blocks means smaller metadata,\nbut writes smaller than one block\nwill cause a read-modify-write.\nThe default is 512.", "BYTES") blockSize = 512,
+	Option!(size_t, "Hash table size. The default is 1073741824 (1 GiB).") hashTableSize = 1024*1024*1024,
 	Switch!("Run in foreground.", 'f') foreground = false,
 	Option!(string[], "Additional FUSE options (e.g. debug).", "STR", 'o') options = null,
 )
@@ -483,7 +839,6 @@ void thincow(
 
 	.blockSize = blockSize;
 
-	size_t totalBlocks;
 	upstream.value.listDir!((de)
 	{
 		stderr.write(de.baseName, ": ");
@@ -541,20 +896,31 @@ void thincow(
 		return ptr[0 .. size];
 	}
 
-	auto blockMap = cast(BlockRef[])mapFile(metadataDir, "blockmap", BlockRef.sizeof, totalBlocks);
-	foreach (ref dev; devs)
-	{
-		auto numBlocks = (dev.data.length + blockSize - 1) / blockSize;
-		dev.blockMap = blockMap[dev.firstBlock .. dev.firstBlock + numBlocks];
-	}
+	globals = cast(Globals*)mapFile(metadataDir, "globals", Globals.sizeof, 1).ptr;
 
-	auto hashTableLength = cast(ulong)(totalBlocks * hashTableRatio);
-	hashTableLength = hashTableLength.roundUpToPowerOfTwo;
-	hashTable = cast(BlockRef[])mapFile(metadataDir, "hashtable", BlockRef.sizeof, hashTableLength);
+	auto btreeMaxLength = totalBlocks; // worst case
+	blockMap = cast(BTreeNode[])mapFile(metadataDir, "blockmap", BTreeNode.sizeof, btreeMaxLength);
+
+	auto hashTableLength = hashTableSize / HashTableBucket.sizeof;
+	enforce(hashTableLength * HashTableBucket.sizeof == hashTableSize, "Hash table size must be a multiple of %s".format(HashTableBucket.sizeof));
+	enforce(hashTableLength == hashTableLength.roundUpToPowerOfTwo, "Hash table size must be a power of 2");
+	hashTable = cast(HashTableBucket[])mapFile(metadataDir, "hashtable", HashTableBucket.sizeof, hashTableLength);
 
 	auto maxCowBlocks = totalBlocks + 2; // Index 0 is reserved, and one more for swapping
 	cowMap = cast(COWIndex[])mapFile(metadataDir, "cowmap", COWIndex.sizeof, maxCowBlocks);
 	cowData = cast(ubyte[])mapFile(dataDir, "cowdata", blockSize, maxCowBlocks);
+
+	if (!globals.btreeLength)
+	{
+		stderr.writeln("Initializing block map B-tree.");
+		globals.btreeRoot = globals.btreeLength++;
+		auto root = &blockMap[globals.btreeRoot];
+		root.isLeaf = true;
+		BlockRef br;
+		br.upstream = 0;
+		root.elems[0].firstBlockRef = br;
+	}
+	debug(btree) dumpBtree();
 
 	fuse_operations fsops;
 	fsops.readdir = &fs_readdir;
@@ -575,6 +941,7 @@ void thincow(
 	auto f_args = FUSE_ARGS_INIT(cast(int)c_args.length, c_args.ptr);
 
 	fuse_main(f_args.argc, f_args.argv, &fsops, null);
+	stderr.writeln("thincow exiting.");
 }
 
 mixin main!(funopt!thincow);
