@@ -760,6 +760,25 @@ const(ubyte)[] readBlock(BlockRef br) nothrow
 	}
 }
 
+/// As above, but don't trust that `br` is valid.
+/// Return `null` if it isn't.
+const(ubyte)[] tryReadBlock(BlockRef br) nothrow
+{
+	final switch (br.type)
+	{
+		case BlockRef.Type.unknown:
+			return null;
+		case BlockRef.Type.upstream:
+			if (br.upstream >= totalBlocks)
+				return null;
+			return readBlock(br);
+		case BlockRef.Type.cow:
+			if (cowMap[br.cow].free)
+				return null;
+			return readBlock(br);
+	}
+}
+
 /// Where the next block will go should it be added to the COW store.
 BlockRef getNextCow() nothrow
 {
@@ -785,6 +804,21 @@ void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 {
 	BlockIndex blockIndex = dev.firstBlock + devBlockIndex;
 	unreferenceBlock(getBlockRef(blockIndex));
+
+	// Check if we can extend from the previous block.
+	if (blockIndex > 0)
+	{
+		auto extrapolatedBlockRef = getBlockRef(blockIndex - 1) + 1;
+		auto extrapolatedBlock = tryReadBlock(extrapolatedBlockRef);
+		if (extrapolatedBlock && extrapolatedBlock == block)
+		{
+			referenceBlock(extrapolatedBlockRef);
+			putBlockRef(blockIndex, extrapolatedBlockRef);
+			writesDeduplicated++;
+			writesTotal++;
+			return;
+		}
+	}
 
 	auto nextCow = getNextCow();
 	auto result = hashBlock(block, nextCow);
