@@ -19,7 +19,7 @@ Building
 Usage
 -----
 
-1. Create a directory containing the upstream devices.
+1. Create a directory containing the upstream device(s).
    You can use symlinks to add block devices in `/dev`.
 
 2. Create data (and optionally metadata) directories for `thincow`'s use.
@@ -36,7 +36,7 @@ Usage
    See `thincow --help` for a full description of all options.
 
 4. You can now access and modify the data in the files under the specified mount-point.
-   Modifications will be deduplicated and stored to `thincow`'s store.
+   Modifications will be deduplicated and stored to `thincow`'s data files.
 
 Notes:
 
