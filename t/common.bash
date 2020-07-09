@@ -60,7 +60,7 @@ function run_thincow() {
 		flock 9
 		cd "$root"
 		args=(
-			rdmd -L-lfuse -g -debug --build-only -oft/tmp/thincow
+			rdmd -Ilib/import -L-lfuse -g -debug --build-only -oft/tmp/thincow
 		)
 		if (( ${THINCOW_COV:-0} ))
 		then
