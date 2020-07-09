@@ -87,7 +87,7 @@ function run_thincow() {
 	fi
 	if [[ -v THINCOW_TEST_DEBUG ]]
 	then
-		"${args[@]}" -f -o debug &> log.txt &
+		"${args[@]}" -f -o debug &>> log.txt &
 		sleep 1
 	else
 		"${args[@]}"
