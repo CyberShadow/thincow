@@ -109,9 +109,10 @@ while (1) {
 	  $total += $pos2 - $pos;
 	  $pos = $pos2;
 }
+print STDERR "$total bytes used on disk\n";
 print $total;
 EOF
 )
-
+	printf '%s: ' "$1" 1>&2
 	perl -le "$script" < "$1"
 }
