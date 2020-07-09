@@ -95,6 +95,37 @@ The goal of the test is to model converting a btrfs RAID10 filesystem of four de
 - After starting `thincow`, the four source devices are mounted, then the target device is added to the filesystem.
 - After a balance, the four original devices can be removed from a filesystem, effectively forcing the data to be moved to the new device.
 - At the end, we verify that less than 2 MB of real disk space was used for the above conversion, despite the operation moving around at least 150 MB of data.
+  This can also be seen by checking `stats-full.txt` under the mount point:
+  
+      Block size: 4096
+      Total blocks: 212992 (872415232 bytes)
+      B-tree nodes: 36 (147456 bytes)
+      Current B-tree root: 1
+      Devices:
+          Device #0: "single", 335544320 bytes, first block: 0
+          Device #1: "d", 134217728 bytes, first block: 81920
+          Device #2: "c", 134217728 bytes, first block: 114688
+          Device #3: "b", 134217728 bytes, first block: 147456
+          Device #4: "a", 134217728 bytes, first block: 180224
+      Hash table: 16384 buckets (1048576 bytes), 8 entries per bucket (64 bytes)
+      Hash table occupancy: 38876/131072 (29%)
+          0 slots: ##############.......................... 1521 buckets
+          1 slots: ##################################...... 3658 buckets
+          2 slots: ######################################## 4249 buckets
+          3 slots: ###############################......... 3399 buckets
+          4 slots: ###################..................... 2032 buckets
+          5 slots: #########............................... 959 buckets
+          6 slots: ###..................................... 410 buckets
+          7 slots: #....................................... 108 buckets
+          8 slots: ........................................ 48 buckets
+      Blocks written: 42015 total, 41049 (168136704 bytes, 98%) deduplicated
+      COW store: 420 blocks (1720320 bytes), 0 free for reuse
+      Total COW references: 1058 blocks (4333568 bytes)
+      Disk space savings:
+          Deduplicated to upstream: 40059 blocks (164081664 bytes)
+          Deduplicated to COW store: 639 blocks (2617344 bytes)
+          Total: 40698 blocks (166699008 bytes)
+
 
 License
 -------
