@@ -10,4 +10,4 @@ done
 
 run_thincow
 diff -q <(ls upstream) <(ls target)
-fusermount -u target
+stop_thincow

@@ -15,5 +15,5 @@ dd if=/dev/zero                           of=target/test bs=64K count=1 status=n
 ( seq 1e99 || true ) | dd iflag=fullblock of=target/test bs=64K count=1 status=none conv=notrunc seek=1
 dd if=/dev/zero                           of=target/test bs=64K count=1 status=none conv=notrunc seek=1
 
-fusermount -u target
+stop_thincow
 diff -u <(get_usage data/cowdata) /dev/stdin <<< $((1 * block_size))

@@ -57,6 +57,6 @@ umount mnt
 
 losetup -d "${loops[@]}"
 
-fusermount -u target
+stop_thincow
 
 [[ "$(get_usage data/cowdata)" -lt $((5*1024*1024)) ]]

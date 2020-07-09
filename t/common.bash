@@ -94,6 +94,10 @@ function run_thincow() {
 	fi
 }
 
+function stop_thincow() {
+	fusermount -u target
+}
+
 # Get disk usage of a file, in bytes.
 # More reliable than du.
 function get_usage() {

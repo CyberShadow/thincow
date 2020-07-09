@@ -7,7 +7,7 @@ source common.bash
 ( seq 1e9 1e99 || true ) | dd iflag=fullblock of=newdata       bs=$block_size count=16 status=none
 run_thincow
 dd if=newdata of=target/test bs=$block_size count=16 status=none conv=notrunc
-fusermount -u target
+stop_thincow
 run_thincow
 diff -q target/test newdata
-fusermount -u target
+stop_thincow
