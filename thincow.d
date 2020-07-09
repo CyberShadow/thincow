@@ -734,6 +734,7 @@ enum FuseHandle : uint64_t
 	none,
 	rootDir,
 	devsDir,
+	debugDir,
 
 	firstDevice = 0x10000000_00000000,
 	firstFile   = 0x20000000_00000000,
@@ -749,18 +750,24 @@ extern(C) nothrow
 	int fs_getattr(const char* c_path, stat_t* s)
 	{
 		auto path = c_path.fromStringz;
-		if (path == "/" || path == "/devs")
-			s.st_mode = S_IFDIR | S_IRWXU;
-		else
-		if (path.startsWith("/devs/"))
+		switch (path)
 		{
-			auto dev = getDev(path);
-			if (!dev) return -ENOENT;
-			s.st_size = dev.data.length;
-			s.st_mode = S_IFREG | S_IRUSR | S_IWUSR;
+			case "/":
+			case "/devs":
+			case "/debug":
+				s.st_mode = S_IFDIR | S_IRUSR | S_IXUSR;
+				break;
+			default:
+				if (path.startsWith("/devs/"))
+				{
+					auto dev = getDev(path);
+					if (!dev) return -ENOENT;
+					s.st_size = dev.data.length;
+					s.st_mode = S_IFREG | S_IRUSR | S_IWUSR;
+				}
+				else
+					return -ENOENT;
 		}
-		else
-			return -ENOENT;
 		s.st_mtime = 0;
 		s.st_uid = getuid();
 		s.st_gid = getgid();
@@ -785,6 +792,14 @@ extern(C) nothrow
 				foreach (ref dev; devs)
 					filler(buf, cast(char*)toStringz(dev.name), null, 0);
 				return 0;
+			case FuseHandle.debugDir:
+			{
+				static immutable char*[] debugDir = [
+				];
+				foreach (d; debugDir)
+					filler(buf, cast(char*)d, null, 0);
+				return 0;
+			}
 			default:
 				return -ENOTDIR;
 		}
@@ -800,6 +815,9 @@ extern(C) nothrow
 				return 0;
 			case "/devs":
 				fi.fh = FuseHandle.devsDir;
+				return 0;
+			case "/debug":
+				fi.fh = FuseHandle.debugDir;
 				return 0;
 			default:
 				if (path.startsWith("/devs/"))
