@@ -120,9 +120,9 @@ ref Dev findDev(BlockIndex blockIndex) nothrow
 /// Find device by path.
 Dev* getDev(const(char)[] path) nothrow
 {
-	if (!path.length || path[0] != '/')
+	if (!path.startsWith("/devs/"))
 		return null;
-	path = path[1..$];
+	path = path["/devs/".length .. $];
 	foreach (ref dev; devs)
 		if (dev.name == path)
 			return &dev;
@@ -734,15 +734,18 @@ extern(C) nothrow
 	int fs_getattr(const char* c_path, stat_t* s)
 	{
 		auto path = c_path.fromStringz;
-		if (path == "/")
+		if (path == "/" || path == "/devs")
 			s.st_mode = S_IFDIR | S_IRWXU;
 		else
+		if (path.startsWith("/devs/"))
 		{
 			auto dev = getDev(path);
 			if (!dev) return -ENOENT;
 			s.st_size = dev.data.length;
 			s.st_mode = S_IFREG | S_IRUSR | S_IWUSR;
 		}
+		else
+			return -ENOENT;
 		s.st_mtime = 0;
 		s.st_uid = getuid();
 		s.st_gid = getgid();
@@ -753,11 +756,24 @@ extern(C) nothrow
 				fuse_fill_dir_t filler, off_t /*offset*/, fuse_file_info* fi)
 	{
 		auto path = c_path.fromStringz;
-		if (path != "/")
-			return -ENOENT;
-		foreach (ref dev; devs)
-			filler(buf, cast(char*)toStringz(dev.name), null, 0);
-		return 0;
+		switch (path)
+		{
+			case "/":
+			{
+				static immutable char*[] rootDir = [
+					"devs",
+				];
+				foreach (d; rootDir)
+					filler(buf, cast(char*)d, null, 0);
+				return 0;
+			}
+			case "/devs":
+				foreach (ref dev; devs)
+					filler(buf, cast(char*)toStringz(dev.name), null, 0);
+				return 0;
+			default:
+				return -ENOENT;
+		}
 	}
 
 	int fs_open(const char* c_path, fuse_file_info* fi)

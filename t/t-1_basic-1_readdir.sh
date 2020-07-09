@@ -9,5 +9,5 @@ do
 done
 
 run_thincow
-diff -q <(ls upstream) <(ls target)
+diff -q <(ls upstream) <(ls target/devs)
 stop_thincow

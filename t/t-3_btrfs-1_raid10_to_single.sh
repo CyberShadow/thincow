@@ -33,11 +33,11 @@ run_thincow
 loops=()
 for d in "${devs[@]}"
 do
-	loops+=("$(losetup -f --show target/"$d")")
+	loops+=("$(losetup -f --show target/devs/"$d")")
 done
 mount -o "$( IFS=, ; echo "${loops[*]/#/device=}" )" "${loops[0]}" mnt
 
-single_loop=$(losetup -f --show target/single)
+single_loop=$(losetup -f --show target/devs/single)
 btrfs device add "$single_loop" mnt
 
 btrfs balance start --force -dconvert=single -mconvert=single mnt
@@ -49,7 +49,7 @@ btrfs device remove "${loops[@]}" mnt
 umount mnt
 losetup -d "$single_loop"
 
-mount target/single mnt
+mount target/devs/single mnt
 
 diff -u <(md5sum < mnt/file) /dev/stdin <<< "$hash"
 

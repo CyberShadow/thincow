@@ -72,7 +72,7 @@ The following files are created:
 Note that the above files are created as large sparse files, big enough to accommodate the worst case, but initially don't consume any real disk space.
 
 Finally, `thincow` allows accessing and manipulating the above via a FUSE filesystem, specified as a target directory parameter. 
-The exposed filesystem's file list mirrors that of the upstream device directory.
+The exposed filesystem contains a `devs` directory, whose file list mirrors that of the upstream device directory.
 
 Reading from these files initially produces the same contents as on the upstream devices. When a block is read for the first time, `thincow` makes note of its contents so that it can recognize when a block with the same contents is written back elsewhere later.
 
