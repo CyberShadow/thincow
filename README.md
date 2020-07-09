@@ -33,10 +33,12 @@ Usage
            --data-dir=path/to/data/dir \
            path/to/mount-point
 
-   See `thincow --help` for a full description of all options.
+   Run `thincow --help` to get a full description of all options.
 
 4. You can now access and modify the data in the files under the specified mount-point.
    Modifications will be deduplicated and stored to `thincow`'s data files.
+
+5. When done, run `fusermount -u path/to/mount-point` to shut down `thincow` gracefully.
 
 Notes:
 
@@ -51,8 +53,8 @@ Notes:
 
 - It is not safe to resume after an ungraceful termination or power failure.
 
-Description
------------
+Details
+-------
 
 `thincow` takes as input (the `--upstream` parameter) a directory containing the "upstream" block devices (or symlinks to them, or plain files).
 These are never written to, and `thincow` assumes that they won't change for the lifetime of its data/metadata storage.
@@ -61,12 +63,12 @@ The `--data-dir` and `--metadata-dir` parameters indicate where to save modified
 
 The following files are created:
 
-- `blockmap` is an index holding information for where a block is stored. There is one element for all upstream blocks. Each element can be one of:
-  - A block from the upstream device (not necessarily at the same position as this element)
-  - A block in the COW store, for blocks containing data which was never seen on an upstream device
-  - Unknown (`thincow` hasn't looked at the contents of this block yet).
+- `blockmap` is a B-tree holding information for where a block is stored. Information is organized into extents (a continuous range of blocks). Each extent can point to one of:
+  - An extent from the upstream device (not necessarily at the same position as this element)
+  - An extent in the COW store, for blocks containing data which was never seen on an upstream device
 - `hashtable` contains a hash table of all blocks seen so far. Each element is the same as in `blockmap`.
 - `cowmap` contains an index for the COW block store. It is used to store a reference count for every block, so that `thincow` knows when a COW block can be freed.
+- `globals` is a fixed-length record containing some global variables, such as the B-tree size.
 - `cowdata` (stored in the `--data-dir` directory) holds the contents of COW blocks (blocks containing data which was never seen on an upstream device). Each block's contents is unique.
 
 Note that the above files are created as large sparse files, big enough to accommodate the worst case, but initially don't consume any real disk space.
