@@ -291,24 +291,39 @@ BTreeNode[/*BTreeBlockIndex*/] blockMap;
 
 debug(btree) void dumpBtree()
 {
-	void dump(BTreeBlockIndex nodeIndex)
+	BlockIndex cbi = 0;
+	void visitBlockIndex(BlockIndex bi)
 	{
-		stderr.writef(" @%d{", nodeIndex);
+		assert(cbi < bi, "Out-of-order block index");
+		cbi = bi;
+	}
+
+	void dump(BTreeBlockIndex nodeIndex, uint depth)
+	{
+		void indent() { foreach (d; 0 .. depth) stderr.write("\t"); }
+		indent(), stderr.writefln("@%d{", nodeIndex);
+		depth++;
 		auto node = &blockMap[nodeIndex];
 		foreach (i; 0 .. node.count + 1)
 		{
 			if (i)
-				stderr.write(" ^", node.elems[i].firstBlockIndex);
+			{
+				indent(), stderr.writeln("^", node.elems[i].firstBlockIndex);
+				visitBlockIndex(node.elems[i].firstBlockIndex);
+			}
 			if (node.isLeaf)
-				stderr.write(" ", node.elems[i].firstBlockRef);
+				indent(), stderr.writeln(node.elems[i].firstBlockRef);
 			else
-				dump(node.elems[i].childIndex);
+				dump(node.elems[i].childIndex, depth);
 		}
-		stderr.write(" }");
+		depth--;
+		indent(), stderr.writeln("}");
 	}
-	stderr.write("btree: ^0");
-	dump(globals.btreeRoot);
-	stderr.writeln(" ^", totalBlocks);
+	stderr.writeln("btree:");
+	stderr.writeln("\t^0");
+	dump(globals.btreeRoot, 1);
+	visitBlockIndex(totalBlocks);
+	stderr.writeln("\t^", totalBlocks);
 }
 
 /// Read the block map B-tree and return the BlockRef corresponding to the given BlockIndex.
