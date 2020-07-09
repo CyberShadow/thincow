@@ -736,7 +736,13 @@ enum FuseHandle : uint64_t
 	devsDir,
 
 	firstDevice = 0x10000000_00000000,
+	firstFile   = 0x20000000_00000000,
 }
+
+/// These are virtual files that are rendered at the time of opening,
+/// so that their contents remains consistent throughout the file handle's lifetime.
+string[uint64_t] files;
+uint64_t nextFileIndex = FuseHandle.firstFile;
 
 extern(C) nothrow
 {
@@ -809,15 +815,35 @@ extern(C) nothrow
 		}
 	}
 
+	int fs_release(const char* c_path, fuse_file_info* fi)
+	{
+		if (fi.fh >= FuseHandle.firstFile)
+			files.remove(fi.fh);
+		return 0;
+	}
+
 	int fs_read(const char* /*path*/, char* buf_ptr, size_t size, off_t offset, fuse_file_info* fi)
 	{
+		auto buf = (cast(ubyte*)buf_ptr)[0 .. size];
+
+		if (fi.fh >= FuseHandle.firstFile)
+		{
+			auto pfile = fi.fh in files;
+			if (!pfile) return -EBADFD;
+			auto file = *pfile;
+			if (offset >= file.length)
+				return 0;
+			file = file[offset .. $];
+			auto len = cast(int)min(size, file.length, int.max);
+			buf_ptr[0 .. len] = file[0 .. len];
+			return len;
+		}
 		if (fi.fh >= FuseHandle.firstDevice)
 		{
 			auto devIndex = fi.fh - FuseHandle.firstDevice;
 			if (devIndex >= devs.length) return -EBADFD;
 			auto dev = &devs[devIndex];
 
-			auto buf = (cast(ubyte*)buf_ptr)[0 .. size];
 			auto end = min(offset + size, dev.data.length);
 			if (offset >= end)
 				return 0;
@@ -842,6 +868,8 @@ extern(C) nothrow
 	int fs_write(const char* /*path*/, char* data_ptr, size_t size,
                             off_t offset, fuse_file_info* fi)
 	{
+		if (fi.fh >= FuseHandle.firstFile)
+			return -EROFS;
 		if (fi.fh >= FuseHandle.firstDevice)
 		{
 			auto devIndex = fi.fh - FuseHandle.firstDevice;
@@ -993,6 +1021,7 @@ void thincow(
 	fsops.getattr = &fs_getattr;
 	fsops.open = &fs_open;
 	fsops.opendir = &fs_open;
+	fsops.release = &fs_release;
 	fsops.read = &fs_read;
 	fsops.write = &fs_write;
 	fsops.flag_nullpath_ok = 1;
