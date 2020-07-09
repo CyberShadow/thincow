@@ -1,9 +1,55 @@
 thincow
 =======
 
-`thincow` enables non-destructive, copy-on-write edits of block devices involving copying/moving a lot of data around, using minimal additional disk usage.
+`thincow` enables non-destructive, copy-on-write edits of block devices involving copying/moving a lot of data around, using deduplication for minimal additional disk usage.
 
-Use cases include reshaping storage volumes or filesystems in order to prepare to move them (block-wise) to new media.
+Use cases include:
+
+- Simple-to-use deduplication layer
+- Trying dangerous operations on filesystems, such as invasive repair or conversion
+- Reshaping storage volumes or filesystems in order to prepare to move them (block-wise) to new media
+
+Building
+--------
+
+- Install [a D compiler](https://dlang.org/download.html)
+- Install [Dub](https://github.com/dlang/dub), if it wasn't included with your D compiler
+- Run `dub build -b release`
+
+Usage
+-----
+
+1. Create a directory containing the upstream devices.
+   You can use symlinks to add block devices in `/dev`.
+
+2. Create data (and optionally metadata) directories for `thincow`'s use.
+
+3. Create an empty directory to serve as the `thincow` mount point.
+
+3. Run `thincow`:
+
+       $ ./thincow \
+           --upstream=path/to/upstream/dir \
+           --data-dir=path/to/data/dir \
+           path/to/mount-point
+
+   See `thincow --help` for a full description of all options.
+
+4. You can now access and modify the data in the files under the specified mount-point.
+   Modifications will be deduplicated and stored to `thincow`'s store.
+
+Notes:
+
+- `thincow` can be used purely for deduplication of new data by placing a large empty (sparse) file (e.g. using `truncate` or `dd seek=...`) in the upstream directory.
+  All writes to the file will be deduplicated in the COW store.
+
+- `thincow` can be stopped and resumed using the same data / metadata store, 
+  assuming it is always stopped gracefully (`umount` or `fusermount -u`).
+  Indicating an already populated data/metadata directory with `--data-dir` / `--metadata-dir` 
+  will cause `thincow` to use the data there.
+  The underlying (upstream) devices must also not change between invocations.
+
+- It is not safe to resume after an ungraceful termination or power failure.
 
 Description
 -----------
@@ -35,27 +81,6 @@ Writing to these files will cause `thincow` to deduplicate blocks according to i
 - If a block was seen (during reading) on an upstream device, then it is mapped to said block on the upstream device. 
 - Otherwise, if it matches a block that's already in the COW store, it is mapped to that block (and its reference counter is incremented).
 - Otherwise, it is saved as a new block to the COW store.
-
-Usage notes
------------
-
-- `thincow` can be used purely for deduplication of new data by placing a large empty (sparse) file (e.g. using `truncate` or `dd seek=...`) in the upstream directory.
-  All writes to the file will be deduplicated in the COW store.
-
-- `thincow` can be stopped and resumed using the same data / metadata store, 
-  assuming it is always stopped gracefully (`umount` or `fusermount -u`).
-  Indicating an already populated data/metadata directory with `--data-dir` / `--metadata-dir` 
-  will cause `thincow` to use the data there.
-  The underlying (upstream) devices must also not change between invocations.
-
-- It is not safe to resume after an ungraceful termination or power failure.
-
-Building
---------
-
-- Install [a D compiler](https://dlang.org/download.html)
-- Install [Dub](https://github.com/dlang/dub), if it wasn't included with your D compiler
-- Run `dub build -b release`
 
 Example
 -------
