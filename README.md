@@ -92,7 +92,7 @@ The goal of the test is to model converting a btrfs RAID10 filesystem of four de
 - Then, we add an empty file to serve as a logical target for the destination device.
 - After starting `thincow`, the four source devices are mounted, then the target device is added to the filesystem.
 - After a balance, the four original devices can be removed from a filesystem, effectively forcing the data to be moved to the new device.
-- At the end, we verify that less than 4 MB of real disk space was used for the above conversion, despite the operation moving around at least 150 MB of data.
+- At the end, we verify that less than 2 MB of real disk space was used for the above conversion, despite the operation moving around at least 150 MB of data.
 
 License
 -------

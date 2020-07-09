@@ -59,4 +59,4 @@ losetup -d "${loops[@]}"
 
 stop_thincow
 
-[[ "$(get_usage data/cowdata)" -lt $((5*1024*1024)) ]]
+[[ "$(get_usage data/cowdata)" -lt $((2*1024*1024)) ]]

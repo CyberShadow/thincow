@@ -3,7 +3,7 @@ set -eEuo pipefail
 test_name=$(basename "$0" .sh)
 test_dir=tmp/$test_name
 
-block_size=4096
+block_size=4096 # Can't reliably measure disk usage in lower granularity than page size
 
 root=$(dirname "$PWD")
 
