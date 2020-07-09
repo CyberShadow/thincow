@@ -71,6 +71,12 @@ function run_thincow() {
 		"${args[@]}" thincow.d
 	) 9>> ../build.lock
 
+	# Pipe to signal thincow exit
+	rm -f fifo
+	mkfifo fifo
+	cat fifo &
+	fifo_pid=$!
+
 	args=(
 		../thincow
 		--upstream=upstream
@@ -85,17 +91,19 @@ function run_thincow() {
 			--DRT-covopt="merge:1 srcpath:$root dstpath:$(dirname "$PWD")/cov"
 		)
 	fi
+
 	if [[ -v THINCOW_TEST_DEBUG ]]
 	then
 		"${args[@]}" -f -o debug &>> log.txt &
 		sleep 1
 	else
 		"${args[@]}"
-	fi
+	fi 9> fifo
 }
 
 function stop_thincow() {
 	fusermount -u target
+	wait $fifo_pid
 }
 
 # Get disk usage of a file, in bytes.
