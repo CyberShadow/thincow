@@ -23,7 +23,9 @@ import std.algorithm.comparison;
 import std.digest.murmurhash;
 import std.exception;
 import std.file;
+import std.format;
 import std.path;
+import std.range.primitives;
 import std.stdio;
 import std.string;
 
@@ -60,7 +62,11 @@ struct BlockRef
 
 	ulong value;
 
-	string toString() const { return format("%s(%d)", type, offset); }
+	void toString(W)(ref W writer) const
+	if (isOutputRange!(W, char))
+	{
+		writer.formattedWrite!"%s(%d)"(type, offset);
+	}
 
 nothrow @nogc:
 	this(Type type, ulong offset) { value = offset | (ulong(type) << 62); assert(this.type == type && this.offset == offset); }
@@ -289,7 +295,8 @@ union BTreeNode
 
 BTreeNode[/*BTreeBlockIndex*/] blockMap;
 
-debug(btree) void dumpBtree()
+void dumpBtree(W)(ref W writer)
+if (isOutputRange!(W, char))
 {
 	BlockIndex cbi = 0;
 	void visitBlockIndex(BlockIndex bi)
@@ -298,32 +305,49 @@ debug(btree) void dumpBtree()
 		cbi = bi;
 	}
 
-	void dump(BTreeBlockIndex nodeIndex, uint depth)
+	static struct Indent
 	{
-		void indent() { foreach (d; 0 .. depth) stderr.write("\t"); }
-		indent(), stderr.writefln("@%d{", nodeIndex);
+		uint depth;
+		void toString(W)(ref W writer) const
+		if (isOutputRange!(W, char))
+		{
+			foreach (d; 0 .. depth) put(writer, '\t');
+		}
+	}
+	uint depth;
+	Indent indent() { return Indent(depth); }
+
+	void dump(BTreeBlockIndex nodeIndex)
+	{
+		writer.formattedWrite!"%s@%d{\n"(indent, nodeIndex);
 		depth++;
 		auto node = &blockMap[nodeIndex];
 		foreach (i; 0 .. node.count + 1)
 		{
 			if (i)
 			{
-				indent(), stderr.writeln("^", node.elems[i].firstBlockIndex);
+				writer.formattedWrite!"%s^%d\n"(indent, node.elems[i].firstBlockIndex);
 				visitBlockIndex(node.elems[i].firstBlockIndex);
 			}
 			if (node.isLeaf)
-				indent(), stderr.writeln(node.elems[i].firstBlockRef);
+				writer.formattedWrite!"%s%s\n"(indent, node.elems[i].firstBlockRef);
 			else
-				dump(node.elems[i].childIndex, depth);
+				dump(node.elems[i].childIndex);
 		}
 		depth--;
-		indent(), stderr.writeln("}");
+		writer.formattedWrite!"%s}\n"(indent);
 	}
-	stderr.writeln("btree:");
-	stderr.writeln("\t^0");
-	dump(globals.btreeRoot, 1);
+	put(writer, "btree:\n" ~ "\t^0\n");
+	depth++;
+	dump(globals.btreeRoot);
 	visitBlockIndex(totalBlocks);
-	stderr.writeln("\t^", totalBlocks);
+	writer.formattedWrite!"\t^%d\n"(totalBlocks);
+}
+
+debug(btree) void dumpBtree()
+{
+	auto writer = stderr.lockingTextWriter;
+	dumpBtree(writer);
 }
 
 /// Read the block map B-tree and return the BlockRef corresponding to the given BlockIndex.
