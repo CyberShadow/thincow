@@ -20,12 +20,14 @@ import core.sys.posix.sys.mman;
 import core.sys.posix.unistd;
 
 import std.algorithm.comparison;
+import std.algorithm.iteration;
 import std.array;
 import std.digest.murmurhash;
 import std.exception;
 import std.file;
 import std.format;
 import std.path;
+import std.range;
 import std.range.primitives;
 import std.stdio;
 import std.string;
@@ -98,6 +100,116 @@ struct Globals
 	BTreeBlockIndex btreeRoot;
 }
 Globals* globals;
+
+// *****************************************************************************
+// Stats
+
+size_t writesTotal, writesDeduplicated;
+
+template dumpStats(bool full)
+{
+	void dumpStats(W)(ref W writer)
+	if (isOutputRange!(W, char))
+	{
+		writer.formattedWrite!"Block size: %d\n"(blockSize);
+		writer.formattedWrite!"Total blocks: %d (%d bytes)\n"(totalBlocks, totalBlocks * blockSize);
+		writer.formattedWrite!"B-tree nodes: %d (%d bytes)\n"(globals.btreeLength, globals.btreeLength * BTreeNode.sizeof);
+		writer.formattedWrite!"Current B-tree root: %d\n"(globals.btreeRoot);
+		writer.formattedWrite!"Devices:\n"();
+		foreach (i, ref dev; devs)
+			writer.formattedWrite!"\tDevice #%d: %(%s%), %d bytes, first block: %d\n"(i, dev.name.only, dev.data.length, dev.firstBlock);
+		writer.formattedWrite!"Hash table: %d buckets (%d bytes), %d entries per bucket (%d bytes)\n"
+			(hashTable.length, hashTable.length * HashTableBucket.sizeof, hashTableBucketLength, hashTableBucketSize);
+		static if (full)
+		{{
+			size_t totalUsed;
+			size_t[hashTableBucketLength + 1] fullnessCounts;
+			foreach (ref bucket; hashTable)
+			{
+				size_t emptyIndex = hashTableBucketLength;
+				foreach (i, hbr; bucket)
+					if (hbr.unknown)
+					{
+						emptyIndex = i;
+						break;
+					}
+					else
+						totalUsed++;
+				fullnessCounts[emptyIndex]++;
+			}
+			auto totalSlots = hashTableBucketLength * hashTable.length;
+			writer.formattedWrite!"Hash table occupancy: %d/%d (%d%%)\n"
+				(totalUsed, totalSlots, totalUsed * 100 / totalSlots);
+			auto maxCount = fullnessCounts[].reduce!max;
+			foreach (i, count; fullnessCounts)
+			{
+				enum maxWidth = 40;
+				auto width = count * maxWidth / maxCount;
+				writer.formattedWrite!"\t%d slots: %s%s %d buckets\n"(
+					i,
+					leftJustifier("",            width, '#'),
+					leftJustifier("", maxWidth - width, '.'),
+					count,
+				);
+			}
+		}}
+		writer.formattedWrite!"Blocks written: %d total, %d (%d bytes, %.0f%%) deduplicated\n"
+			(writesTotal, writesDeduplicated, writesDeduplicated * blockSize, writesDeduplicated * 100.0 / writesTotal);
+		static if (full)
+		{
+			size_t spaceSavedUpstream;
+			void scan(in ref BTreeNode node, BlockIndex start, BlockIndex end)
+			{
+				foreach (elemIndex, ref elem; node.elems[0 .. node.count + 1])
+				{
+					auto elemStart = elemIndex ? elem.firstBlockIndex : start;
+					auto elemEnd = elemIndex < node.count ? node.elems[elemIndex + 1].firstBlockIndex : end;
+					if (node.isLeaf)
+					{
+						if (elem.firstBlockRef.type == BlockRef.Type.upstream && elem.firstBlockRef.upstream != elemStart)
+							spaceSavedUpstream += elemEnd - elemStart;
+					}
+					else
+						scan(blockMap[elem.childIndex], elemStart, elemEnd);
+				}
+			}
+			scan(blockMap[globals.btreeRoot], 0, totalBlocks);
+		}
+		static if (full)
+		{{
+			size_t cowFreeListLength = 0;
+			size_t cowHead = 0;
+			while (cowMap[cowHead].type == COWIndex.Type.nextFree)
+			{
+				cowFreeListLength++;
+				cowHead = cowMap[cowHead].nextFree;
+			}
+			assert(cowMap[cowHead].type == COWIndex.Type.lastBlock);
+			auto cowTotalBlocks = cowMap[cowHead].lastBlock + 1;
+			writer.formattedWrite!"COW store: %d blocks (%d bytes), %d free for reuse\n"
+				(cowTotalBlocks, cowTotalBlocks * blockSize, cowFreeListLength);
+			size_t totalReferenced;
+			size_t spaceSavedCOW;
+			foreach (ci; cowMap[0 .. cowTotalBlocks])
+				if (ci.type == COWIndex.Type.refCount)
+				{
+					totalReferenced += ci.refCount;
+					spaceSavedCOW += ci.refCount - 1; // Don't count the first block, which DOES use up space
+				}
+			writer.formattedWrite!"Total COW references: %d blocks (%d bytes)\n"
+				(totalReferenced, totalReferenced * blockSize);
+
+			auto spaceSavedTotal = spaceSavedUpstream + spaceSavedCOW;
+			writer.formattedWrite!"Disk space savings:\n";
+			writer.formattedWrite!"\tDeduplicated to upstream: %d blocks (%d bytes)\n"
+				(spaceSavedUpstream, spaceSavedUpstream * blockSize);
+			writer.formattedWrite!"\tDeduplicated to COW store: %d blocks (%d bytes)\n"
+				(spaceSavedCOW, spaceSavedCOW * blockSize);
+			writer.formattedWrite!"\tTotal: %d blocks (%d bytes)\n"
+				(spaceSavedTotal, spaceSavedTotal * blockSize);
+		}}
+	}
+}
 
 // *****************************************************************************
 // Devices
@@ -698,8 +810,12 @@ void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 		debug(cow) assertNotThrown({ stderr.write(">>> after writeBlock: "); dumpCOW(); }());
 	}
 	else
+	{
 		referenceBlock(result);
+		writesDeduplicated++;
+	}
 	putBlockRef(blockIndex, result);
+	writesTotal++;
 }
 
 /// Indicates that we are now using one more reference to the given block.
@@ -802,6 +918,8 @@ extern(C) nothrow
 				break;
 			case "/debug/btree.txt":
 			case "/debug/cow.txt":
+			case "/stats.txt":
+			case "/stats-full.txt":
 				s.st_mode = S_IFREG | S_IRUSR;
 				s.st_size = typeof(s.st_size).max;
 				break;
@@ -832,6 +950,8 @@ extern(C) nothrow
 				static immutable char*[] rootDir = [
 					"devs",
 					"debug",
+					"stats.txt",
+					"stats-full.txt",
 				];
 				foreach (d; rootDir)
 					filler(buf, cast(char*)d, null, 0);
@@ -875,6 +995,12 @@ extern(C) nothrow
 				return 0;
 			case "/debug/cow.txt":
 				fi.fh = makeFile!dumpCOW();
+				return 0;
+			case "/stats.txt":
+				fi.fh = makeFile!(dumpStats!false)();
+				return 0;
+			case "/stats-full.txt":
+				fi.fh = makeFile!(dumpStats!true)();
 				return 0;
 			default:
 				if (path.startsWith("/devs/"))
