@@ -382,7 +382,7 @@ extern(C) nothrow
 	}
 
 	int fs_readdir(const char* c_path, void* buf,
-				fuse_fill_dir_t filler, off_t offset, fuse_file_info* fi)
+				fuse_fill_dir_t filler, off_t /*offset*/, fuse_file_info* fi)
 	{
 		auto path = c_path.fromStringz;
 		if (path != "/")
