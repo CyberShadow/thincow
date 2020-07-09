@@ -794,6 +794,10 @@ extern(C) nothrow
 			case "/debug":
 				s.st_mode = S_IFDIR | S_IRUSR | S_IXUSR;
 				break;
+			case "/debug/btree.txt":
+				s.st_mode = S_IFREG | S_IRUSR;
+				s.st_size = typeof(s.st_size).max;
+				break;
 			default:
 				if (path.startsWith("/devs/"))
 				{
@@ -820,6 +824,7 @@ extern(C) nothrow
 			{
 				static immutable char*[] rootDir = [
 					"devs",
+					"debug",
 				];
 				foreach (d; rootDir)
 					filler(buf, cast(char*)d, null, 0);
@@ -832,6 +837,7 @@ extern(C) nothrow
 			case FuseHandle.debugDir:
 			{
 				static immutable char*[] debugDir = [
+					"btree.txt",
 				];
 				foreach (d; debugDir)
 					filler(buf, cast(char*)d, null, 0);
@@ -855,6 +861,9 @@ extern(C) nothrow
 				return 0;
 			case "/debug":
 				fi.fh = FuseHandle.debugDir;
+				return 0;
+			case "/debug/btree.txt":
+				fi.fh = makeFile!dumpBtree();
 				return 0;
 			default:
 				if (path.startsWith("/devs/"))
