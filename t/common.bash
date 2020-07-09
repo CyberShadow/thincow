@@ -87,6 +87,7 @@ function run_thincow() {
 		--upstream=upstream
 		--data-dir=data
 		--block-size="$block_size"
+		--hash-table-size=$((1024*1024))
 		target
 		"$@"
 	)
