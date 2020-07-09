@@ -62,6 +62,12 @@ function run_thincow() {
 		args=(
 			rdmd -L-lfuse -g -debug --build-only -oft/tmp/thincow
 		)
+		if (( ${THINCOW_COV:-0} ))
+		then
+			args+=(
+				-cov
+			)
+		fi
 		"${args[@]}" thincow.d
 	) 9>> ../build.lock
 
@@ -73,6 +79,12 @@ function run_thincow() {
 		target
 		"$@"
 	)
+	if (( ${THINCOW_COV:-0} ))
+	then
+		args+=(
+			--DRT-covopt="merge:1 srcpath:$root dstpath:$(dirname "$PWD")/cov"
+		)
+	fi
 	if [[ -v THINCOW_TEST_DEBUG ]]
 	then
 		"${args[@]}" -f -o debug &> log.txt &
