@@ -579,16 +579,22 @@ COWIndex[] cowMap;
 /// The raw storage for COW data (data which does not exist on upstream devices)
 ubyte[] cowData;
 
-debug(cow) void dumpCOW()
+void dumpCOW(W)(ref W writer)
+if (isOutputRange!(W, char))
 {
-	stderr.write("cow:");
+	put(writer, "cow:\n");
 	foreach (i, ci; cowMap)
 	{
-		stderr.writef(" %d:%s", i, ci);
+		writer.formattedWrite!"\t%d: %s\n"(i, ci);
 		if (ci == COWIndex.init)
 			break;
 	}
-	stderr.writeln();
+}
+
+debug(cow) void dumpCOW()
+{
+	auto writer = stderr.lockingTextWriter;
+	dumpCOW(writer);
 }
 
 // *****************************************************************************
@@ -795,6 +801,7 @@ extern(C) nothrow
 				s.st_mode = S_IFDIR | S_IRUSR | S_IXUSR;
 				break;
 			case "/debug/btree.txt":
+			case "/debug/cow.txt":
 				s.st_mode = S_IFREG | S_IRUSR;
 				s.st_size = typeof(s.st_size).max;
 				break;
@@ -838,6 +845,7 @@ extern(C) nothrow
 			{
 				static immutable char*[] debugDir = [
 					"btree.txt",
+					"cow.txt",
 				];
 				foreach (d; debugDir)
 					filler(buf, cast(char*)d, null, 0);
@@ -864,6 +872,9 @@ extern(C) nothrow
 				return 0;
 			case "/debug/btree.txt":
 				fi.fh = makeFile!dumpBtree();
+				return 0;
+			case "/debug/cow.txt":
+				fi.fh = makeFile!dumpCOW();
 				return 0;
 			default:
 				if (path.startsWith("/devs/"))
