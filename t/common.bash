@@ -56,20 +56,25 @@ mkdir data target upstream
 
 function run_thincow() {
 	# Build
-	(
-		flock 9
-		cd "$root"
-		args=(
-			rdmd -Ilib/import -L-lfuse -g -debug --build-only -oft/tmp/thincow
-		)
-		if (( ${THINCOW_COV:-0} ))
-		then
-			args+=(
-				-cov
+	if [[ $EUID != 0 ]]
+	then
+		(
+			flock 9
+			cd "$root"
+			args=(
+				rdmd -Ilib/import -L-lfuse -g -debug --build-only -oft/tmp/thincow
 			)
-		fi
-		"${args[@]}" thincow.d
-	) 9>> ../build.lock
+			if (( ${THINCOW_COV:-0} ))
+			then
+				args+=(
+					-cov
+				)
+			fi
+			"${args[@]}" thincow.d
+		) 9>> ../build.lock
+	else
+		echo '(Not rebuilding thincow as root...)'
+	fi
 
 	# Pipe to signal thincow exit
 	rm -f fifo
