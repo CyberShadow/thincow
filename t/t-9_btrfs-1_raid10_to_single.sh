@@ -9,6 +9,8 @@ then
 	exit
 fi
 
+hash_table_size=$((1024*1024))
+
 devs=(a b c d)
 loops=()
 for d in "${devs[@]}"

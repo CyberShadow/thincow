@@ -4,6 +4,7 @@ test_name=$(basename "$0" .sh)
 test_dir=tmp/$test_name
 
 block_size=4096 # Can't reliably measure disk usage in lower granularity than page size
+hash_table_size=256
 
 root=$(dirname "$PWD")
 
@@ -98,7 +99,7 @@ function run_thincow() {
 		--upstream=upstream
 		--data-dir=data
 		--block-size="$block_size"
-		--hash-table-size=$((1024*1024))
+		--hash-table-size=$hash_table_size
 		target
 		"$@"
 	)
