@@ -87,7 +87,7 @@ Writing to these files will cause `thincow` to deduplicate blocks according to i
 Example
 -------
 
-For a small practical example, see the [`t/t-3_btrfs-1_raid10_to_single.sh`](https://github.com/cybershadow/thincow/blob/master/t/t-3_btrfs-1_raid10_to_single.sh) test. 
+For a small practical example, see the [`t/t-9_btrfs-1_raid10_to_single.sh`](https://github.com/cybershadow/thincow/blob/master/t/t-9_btrfs-1_raid10_to_single.sh) test. 
 The goal of the test is to model converting a btrfs RAID10 filesystem of four devices to a single, larger device with a `single` profile.
 
 - In the test, we set up the btrfs filesystem (consisting of four 128 MB devices) and fill it with 150 MB of data.
