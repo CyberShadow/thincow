@@ -99,7 +99,7 @@ function run_thincow() {
 		--upstream=upstream
 		--data-dir=data
 		--block-size="$block_size"
-		--hash-table-size=$hash_table_size
+		--hash-table-size="$hash_table_size"
 		target
 		"$@"
 	)
