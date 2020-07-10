@@ -1156,9 +1156,11 @@ void thincow(
 	Parameter!(string, "Where to mount the FUSE filesystem.") target,
 	Option!(string, "Directory containing upstream devices/symlinks.", "PATH") upstream,
 	Option!(string, "Directory where to store COW blocks.", "PATH") dataDir,
-	Option!(string, "Directory where to store metadata.\nIf unspecified, defaults to the data directory.\nSpecify - to use RAM.", "PATH") metadataDir = null,
-	Option!(size_t, "Block size. Larger blocks means smaller metadata,\nbut writes smaller than one block\nwill cause a read-modify-write.\nThe default is 512.", "BYTES") blockSize = 512,
-	Option!(size_t, "Hash table size. The default is 1073741824 (1 GiB).") hashTableSize = 1024*1024*1024,
+	Option!(string, "Directory where to store metadata. If unspecified, defaults to the data directory.\nSpecify \"-\" to use RAM.", "PATH") metadataDir = null,
+	Option!(size_t, "Block size.\nLarger blocks means smaller metadata, but writes smaller than one block will cause a read-modify-write. The default is 512.", "BYTES") blockSize = 512,
+	Option!(size_t, "Hash table size.\nThe default is 1073741824 (1 GiB).", "BYTES") hashTableSize = 1024*1024*1024,
+	Option!(size_t, "Maximum size of the block map.", "BYTES") maxBlockMapSize = 1L << 63,
+	Option!(size_t, "Maximum number of blocks in the COW store.", "BLOCKS") maxCowBlocks = 1L << 63,
 	Switch!("Run in foreground.", 'f') foreground = false,
 	Option!(string[], "Additional FUSE options (e.g. debug).", "STR", 'o') options = null,
 )
@@ -1230,6 +1232,10 @@ void thincow(
 	globals = cast(Globals*)mapFile(metadataDir, "globals", Globals.sizeof, 1).ptr;
 
 	auto btreeMaxLength = totalBlocks; // worst case
+	auto btreeMaxSize = btreeMaxLength * BTreeNode.sizeof;
+	if (btreeMaxSize > maxBlockMapSize)
+		btreeMaxSize = maxBlockMapSize;
+	btreeMaxLength = btreeMaxSize / BTreeNode.sizeof;
 	blockMap = cast(BTreeNode[])mapFile(metadataDir, "blockmap", BTreeNode.sizeof, btreeMaxLength);
 
 	auto hashTableLength = hashTableSize / HashTableBucket.sizeof;
@@ -1238,7 +1244,8 @@ void thincow(
 	enforce(hashTableLength <= 0x1_0000_0000, "Hash table is too large");
 	hashTable = cast(HashTableBucket[])mapFile(metadataDir, "hashtable", HashTableBucket.sizeof, hashTableLength);
 
-	auto maxCowBlocks = totalBlocks + 2; // Index 0 is reserved, and one more for swapping
+	auto maxCowBlocksLimit = totalBlocks + 2; // Index 0 is reserved, and one more for swapping
+	maxCowBlocks = min(maxCowBlocks, maxCowBlocksLimit);
 	cowMap = cast(COWIndex[])mapFile(metadataDir, "cowmap", COWIndex.sizeof, maxCowBlocks);
 	cowData = cast(ubyte[])mapFile(dataDir, "cowdata", blockSize, maxCowBlocks);
 
