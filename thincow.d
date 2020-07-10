@@ -377,8 +377,17 @@ struct BTreeElement
      | ptr | ptr | ptr . ptr | ptr | ptr |
 */
 
-enum btreeNodeSize = pageSize;
-enum btreeNodeLength = btreeNodeSize / BTreeElement.sizeof;
+debug (tiny_btree_nodes)
+{
+	// Cover more B-tree code (such as splitting)
+	// in test suite by forcing tiny nodes
+	enum btreeNodeLength = 4;
+}
+else
+{
+	enum btreeNodeSize = pageSize;
+	enum btreeNodeLength = btreeNodeSize / BTreeElement.sizeof;
+}
 union BTreeNode
 {
 	/// A B-tree node with N nodes has N-1 keys.

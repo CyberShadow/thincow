@@ -66,7 +66,14 @@ function run_thincow() {
 			flock 9
 			cd "$root"
 			args=(
-				rdmd -Ilib/import -L-lfuse -g -debug --build-only -oft/tmp/thincow
+				rdmd
+				--build-only
+				-oft/tmp/thincow
+				-Ilib/import
+				-L-lfuse
+				-g
+				-debug
+				-debug=tiny_btree_nodes
 			)
 			if (( ${THINCOW_COV:-0} ))
 			then
