@@ -459,12 +459,6 @@ if (isOutputRange!(W, char))
 	writer.formattedWrite!"\t^%d\n"(totalBlocks);
 }
 
-debug(btree) void dumpBtree()
-{
-	auto writer = stderr.lockingTextWriter;
-	dumpBtree(writer);
-}
-
 /// Read the block map B-tree and return the BlockRef corresponding to the given BlockIndex.
 BlockRef getBlockRef(BlockIndex blockIndex) nothrow @nogc
 {
@@ -495,7 +489,7 @@ BlockRef getBlockRef(BlockIndex blockIndex) nothrow @nogc
 /// Write to the block map B-tree and set the given BlockIndex to the given BlockRef.
 void putBlockRef(BlockIndex blockIndex, BlockRef blockRef) nothrow @nogc
 {
-	debug(btree) assertNotThrown({ stderr.write(">>> putBlockRef before: "); dumpBtree(); }());
+	debug(btree) dumpToStderr!dumpBtree(">>> putBlockRef before: ");
 	static void splitNode(ref BTreeNode parent, size_t childElemIndex)
 	{
 		assert(!parent.isLeaf);
@@ -523,7 +517,7 @@ void putBlockRef(BlockIndex blockIndex, BlockRef blockRef) nothrow @nogc
 		parent.count++;
 		parent.elems[childElemIndex + 1].firstBlockIndex = pivot;
 		parent.elems[childElemIndex + 1].childIndex = rightIndex;
-		debug(btree) assertNotThrown({ stderr.write(">>> putBlockRef psplit: "); dumpBtree(); }());
+		debug(btree) dumpToStderr!dumpBtree(">>> putBlockRef psplit: ");
 	}
 
 	/// Returns false if there was not enough room, and the parent needs splitting.
@@ -655,7 +649,7 @@ void putBlockRef(BlockIndex blockIndex, BlockRef blockRef) nothrow @nogc
 		splitNode(*newRoot, 0);
 	}
 
-	debug(btree) assertNotThrown({ stderr.write(">>> putBlockRef after : "); dumpBtree(); }());
+	debug(btree) dumpToStderr!dumpBtree(">>> putBlockRef after : ");
 }
 
 // *****************************************************************************
@@ -703,12 +697,6 @@ if (isOutputRange!(W, char))
 		if (ci == COWIndex.init)
 			break;
 	}
-}
-
-debug(cow) void dumpCOW()
-{
-	auto writer = stderr.lockingTextWriter;
-	dumpCOW(writer);
 }
 
 // *****************************************************************************
@@ -843,7 +831,7 @@ void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 				assert(false);
 		}
 		cowMap[result.cow].refCount = 1;
-		debug(cow) assertNotThrown({ stderr.write(">>> after writeBlock: "); dumpCOW(); }());
+		debug(cow) dumpToStderr!dumpCOW(">>> after writeBlock: ");
 	}
 	else
 	{
@@ -872,7 +860,7 @@ void referenceBlock(BlockRef br) nothrow
 					br, readBlock(br)[0 .. 8], refCount, refCount+1).assertNotThrown;
 			cowMap[index].refCount = refCount + 1;
 		}
-		debug(cow) assertNotThrown({ stderr.write(">>> after referenceBlock: "); dumpCOW(); }());
+		debug(cow) dumpToStderr!dumpCOW(">>> after referenceBlock: ");
 	}
 }
 
@@ -904,7 +892,7 @@ void unreferenceBlock(BlockRef br) nothrow
 			}
 			else
 				cowMap[index].refCount = refCount;
-			debug(cow) assertNotThrown({ stderr.write(">>> after unreferenceBlock: "); dumpCOW(); }());
+			debug(cow) dumpToStderr!dumpCOW(">>> after unreferenceBlock: ");
 		}
 	}
 }
@@ -927,6 +915,15 @@ enum FuseHandle : uint64_t
 /// so that their contents remains consistent throughout the file handle's lifetime.
 string[uint64_t] files;
 uint64_t nextFileIndex = FuseHandle.firstFile;
+
+void dumpToStderr(alias fun)(string prefix) nothrow
+{
+	(){
+		stderr.write(prefix);
+		auto writer = stderr.lockingTextWriter();
+		fun(writer);
+	}().assertNotThrown();
+}
 
 uint64_t makeFile(alias fun)() nothrow
 {
@@ -1259,7 +1256,7 @@ void thincow(
 		br.upstream = 0;
 		root.elems[0].firstBlockRef = br;
 	}
-	debug(btree) dumpBtree();
+	debug(btree) dumpToStderr!dumpBtree("");
 
 	fuse_operations fsops;
 	fsops.readdir = &fs_readdir;
