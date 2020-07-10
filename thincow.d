@@ -529,6 +529,29 @@ void putBlockRef(BlockIndex blockIndex, BlockRef blockRef) nothrow @nogc
 			assert(node.elems[node.count].firstBlockIndex < end);
 		}
 
+		/// Try to merge the given extent into the previous one.
+		void optimize(size_t elemIndex)
+		{
+			if (elemIndex == 0 || elemIndex > node.count)
+				return;
+
+			auto elem = &node.elems[elemIndex];
+			auto elemStart = elemIndex ? elem.firstBlockIndex : start;
+
+			auto pelemIndex = elemIndex - 1;
+			auto pelem = &node.elems[pelemIndex];
+			auto pelemStart = pelemIndex ? pelem.firstBlockIndex : start;
+			auto pelemLength = elemStart - pelemStart;
+			auto extrapolatedElemBlockRef = pelem.firstBlockRef + pelemLength;
+
+			if (extrapolatedElemBlockRef == elem.firstBlockRef)
+			{
+				foreach (i; elemIndex .. node.count)
+					node.elems[i] = node.elems[i + 1];
+				node.count--;
+			}
+		}
+
 		auto elemIndex = node.find(blockIndex);
 	retry:
 		auto elem = &node.elems[elemIndex];
@@ -538,17 +561,19 @@ void putBlockRef(BlockIndex blockIndex, BlockRef blockRef) nothrow @nogc
 		assert(blockIndex >= elemStart && blockIndex < elemEnd);
 		if (node.isLeaf)
 		{
+			if (elem.firstBlockRef + offset == blockRef)
+				return true; // No-op write
+			else
 			if (blockIndex == elemStart) // Write to the beginning of the extent
 			{
 				if (elemIndex > 0 &&
-					elemStart == blockIndex &&
 					(){
 						auto pelemIndex = elemIndex - 1; // Previous element
-						auto pelem = &node.elems[elemIndex - 1];
+						auto pelem = &node.elems[pelemIndex];
 						auto pelemStart = pelemIndex ? pelem.firstBlockIndex : start;
 						auto pelemLength = elemStart - pelemStart;
-						auto extrapolatedPelemBlockRef = pelem.firstBlockRef + pelemLength;
-						return extrapolatedPelemBlockRef == blockRef;
+						auto extrapolatedElemBlockRef = pelem.firstBlockRef + pelemLength;
+						return extrapolatedElemBlockRef == blockRef;
 					}())
 				{
 					// Sequential write optimization - this block is a continuation of the previous extent.
@@ -562,6 +587,7 @@ void putBlockRef(BlockIndex blockIndex, BlockRef blockRef) nothrow @nogc
 						foreach (i; elemIndex .. node.count)
 							node.elems[i] = node.elems[i + 1];
 						node.count--;
+						optimize(elemIndex);
 					}
 					return true;
 				}
@@ -570,6 +596,7 @@ void putBlockRef(BlockIndex blockIndex, BlockRef blockRef) nothrow @nogc
 				{
 					// Extent of length 1, just overwrite it
 					elem.firstBlockRef = blockRef;
+					optimize(elemIndex + 1);
 					return true;
 				}
 				else
@@ -587,6 +614,7 @@ void putBlockRef(BlockIndex blockIndex, BlockRef blockRef) nothrow @nogc
 					// `elem` points to an extent of length 1,
 					// so overwrite it as above.
 					elem.firstBlockRef = blockRef;
+					optimize(elemIndex);
 					return true;
 				}
 			}
@@ -603,6 +631,7 @@ void putBlockRef(BlockIndex blockIndex, BlockRef blockRef) nothrow @nogc
 				auto nelem = &node.elems[elemIndex + 1];
 				nelem.firstBlockIndex = blockIndex;
 				nelem.firstBlockRef = blockRef;
+				optimize(elemIndex + 1);
 				return true;
 			}
 			else // Write to the middle of an extent
