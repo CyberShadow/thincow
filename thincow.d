@@ -12,6 +12,7 @@
  *   Vladimir Panteleev <vladimir@thecybershadow.net>
  */
 
+import core.bitop;
 import core.stdc.errno;
 import core.sys.linux.sys.mman : MAP_ANONYMOUS;
 import core.sys.posix.fcntl;
@@ -86,6 +87,9 @@ nothrow @nogc:
 	BlockRef opBinary(string op : "+")(ulong o) const { BlockRef r; r.value = value + (o << typeBits); assert(r.type == this.type); return r; }
 }
 
+/// Significant bits in a BlockRef.
+uint blockRefBits;
+
 /// Block size we're operating with
 size_t blockSize;
 
@@ -129,7 +133,7 @@ template dumpStats(bool full)
 			{
 				size_t emptyIndex = hashTableBucketLength;
 				foreach (i, hbr; bucket)
-					if (hbr.unknown)
+					if (hbr.empty)
 					{
 						emptyIndex = i;
 						break;
@@ -252,17 +256,30 @@ Dev* getDev(const(char)[] path) nothrow
 // *****************************************************************************
 // Hash table
 
+/// 64-bit value packing a BlockRef and using any remaining bits for hashing.
+struct HashTableCell
+{
+	ulong value = 0;
+
+nothrow @nogc:
+	bool empty() const { return value == 0; }
+	private static ulong blockRefMask() { return ((1UL << blockRefBits) - 1UL); }
+	this(BlockRef br, ulong hashBits) { assert((br.value & ~blockRefMask) == 0); value = br.value | (hashBits << blockRefBits); }
+	@property BlockRef blockRef() { BlockRef br; br.value = value & blockRefMask; return br; }
+	bool isHash(ulong hashBits) const { return (hashBits << blockRefBits) == (value & ~blockRefMask); }
+}
+
 /// Hash -> block lookup
 enum hashTableBucketSize = cacheLineSize; // in bytes
 enum hashTableBucketLength = hashTableBucketSize / BlockRef.sizeof;
-alias HashTableBucket = BlockRef[hashTableBucketLength];
+alias HashTableBucket = HashTableCell[hashTableBucketLength];
 HashTableBucket[] hashTable;
 
 /// Hash some bytes.
-alias Hash = uint;
-Hash hash(const(ubyte)[] block) nothrow
+alias Hash = ulong;
+Hash hashBytes(const(ubyte)[] block) nothrow
 {
-	CRC32 hash;
+	CRC64ECMA hash;
 	hash.start();
 	hash.put(block);
 	auto result = hash.finish();
@@ -278,44 +295,50 @@ BlockRef hashBlock(const(ubyte)[] block, BlockRef br) nothrow
 {
 	assert(block.length == blockSize);
 
-	auto bucketIndex = hash(block) % hashTable.length;
+	auto hash = hashBytes(block);
+	auto bucketIndex = hash % hashTable.length;
+	auto hashRemainder = hash / hashTable.length;
 	auto bucket = hashTable[bucketIndex][];
+	auto cell = HashTableCell(br, hashRemainder);
 
 	// First, check if the block ref is already in this bucket
-	foreach (i, hbr; bucket)
-		if (hbr.unknown)
+	foreach (i, c; bucket)
+		if (c.empty)
 			break;
 		else
-		if (hbr == br)
+		if (c == cell)
 		{
 			// Exact hit - move to front
 			foreach_reverse (j; 0 .. i)
 				bucket[j + 1] = bucket[j];
-			return bucket[0] = hbr;
+			bucket[0] = c;
+			return c.blockRef;
 		}
 
 	// Next, check if one of the blocks has the same contents
 	auto end = hashTableBucketLength - 1;
-	foreach (i, hbr; bucket)
-		if (hbr.unknown)
+	foreach (i, c; bucket)
+		if (c.empty)
 		{
 			// Free cell - stop here
 			end = i;
 			break;
 		}
 		else
-		if (block == readBlock(hbr))
+		if (c.isHash(hashRemainder) && readBlock(c.blockRef) == block)
 		{
 			// Cache hit - move to front
 			foreach_reverse (j; 0 .. i)
 				bucket[j + 1] = bucket[j];
-			return bucket[0] = hbr;
+			bucket[0] = c;
+			return c.blockRef;
 		}
 
 	// Add to front
 	foreach_reverse (j; 0 .. end)
 		bucket[j + 1] = bucket[j];
-	return bucket[0] = br;
+	bucket[0] = cell;
+	return br;
 }
 
 /// Remove a block from the hash table.
@@ -324,25 +347,29 @@ void unhashBlock(BlockRef br) nothrow
 	auto block = readBlock(br);
 	assert(block.length == blockSize);
 
-	auto bucketIndex = hash(block) % hashTable.length;
+	auto hash = hashBytes(block);
+	auto bucketIndex = hash % hashTable.length;
+	auto hashRemainder = hash / hashTable.length;
 	auto bucket = hashTable[bucketIndex][];
-	foreach (i, hbr; bucket)
+	auto cell = HashTableCell(br, hashRemainder);
+
+	foreach (i, c; bucket)
 	{
-		if (hbr.unknown)
+		if (c.empty)
 			return;
 
-		if (hbr == br)
+		if (c == cell)
 		{
-			assert(block == readBlock(hbr), "Matched BlockRef but not data in hash table");
-			assert(hbr.type == BlockRef.Type.cow, "Unhashing non-COW block");
+			assert(block == readBlock(c.blockRef), "Matched BlockRef but not data in hash table");
+			assert(c.blockRef.type == BlockRef.Type.cow, "Unhashing non-COW block");
 			// Remove
 			foreach (j; i + 1 .. hashTableBucketLength)
 			{
 				bucket[j - 1] = bucket[j];
-				if (bucket[j].unknown)
+				if (bucket[j].empty)
 					break;
 			}
-			bucket[hashTableBucketLength - 1] = BlockRef.init;
+			bucket[hashTableBucketLength - 1] = HashTableCell.init;
 			return;
 		}
 	}
@@ -1284,6 +1311,9 @@ void thincow(
 	maxCowBlocks = min(maxCowBlocks, maxCowBlocksLimit);
 	cowMap = cast(COWIndex[])mapFile(metadataDir, "cowmap", COWIndex.sizeof, maxCowBlocks);
 	cowData = cast(ubyte[])mapFile(dataDir, "cowdata", blockSize, maxCowBlocks);
+
+	uint bitsNeeded(ulong maxValue) { assert(maxValue); maxValue--; return maxValue ? 1 + bsr(maxValue) : 0; }
+	blockRefBits = bitsNeeded(maxCowBlocksLimit) + BlockRef.typeBits;
 
 	if (!globals.btreeLength)
 	{
