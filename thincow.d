@@ -62,6 +62,7 @@ struct BlockRef
 		upstream, /// references a data block on an upstream device
 		cow,      /// references a data block in our COW store (1-based index)
 	}
+	enum typeBits = 2;
 
 	ulong value;
 
@@ -72,9 +73,9 @@ struct BlockRef
 	}
 
 nothrow @nogc:
-	this(Type type, ulong offset) { value = offset | (ulong(type) << 62); assert(this.type == type && this.offset == offset); }
-	@property Type type() const { return cast(Type)(value >> 62); }
-	@property ulong offset() const { return value & ((1L << 62) - 1); }
+	this(Type type, ulong offset) { value = (offset << typeBits) | type; assert(this.type == type && this.offset == offset); }
+	@property Type type() const { return cast(Type)(value & ((1UL << typeBits) - 1UL)); }
+	@property ulong offset() const { return value >> typeBits; }
 
 	@property bool unknown() const { return type == Type.unknown; }
 	@property ulong upstream() const { assert(type == Type.upstream); return offset; }
@@ -82,7 +83,7 @@ nothrow @nogc:
 	@property ulong cow() const { assert(type == Type.cow); return offset; }
 	@property void cow(ulong i) { this = BlockRef(Type.cow, i); }
 
-	BlockRef opBinary(string op : "+")(ulong o) const { BlockRef r; r.value = value + o; assert(r.type == this.type); return r; }
+	BlockRef opBinary(string op : "+")(ulong o) const { BlockRef r; r.value = value + (o << typeBits); assert(r.type == this.type); return r; }
 }
 
 /// Block size we're operating with
