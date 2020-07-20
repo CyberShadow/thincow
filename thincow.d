@@ -122,7 +122,7 @@ template dumpStats(bool full)
 		writer.formattedWrite!"Current B-tree root: %d\n"(globals.btreeRoot);
 		writer.formattedWrite!"Devices:\n"();
 		foreach (i, ref dev; devs)
-			writer.formattedWrite!"\tDevice #%d: %(%s%), %d bytes, first block: %d\n"(i, dev.name.only, dev.data.length, dev.firstBlock);
+			writer.formattedWrite!"\tDevice #%d: %(%s%), %d bytes, first block: %d\n"(i, dev.name.only, dev.size, dev.firstBlock);
 		writer.formattedWrite!"Hash table: %d buckets (%d bytes), %d entries per bucket (%d bytes)\n"
 			(hashTable.length, hashTable.length * HashTableBucket.sizeof, hashTableBucketLength, hashTableBucketSize);
 		static if (full)
@@ -222,8 +222,10 @@ template dumpStats(bool full)
 /// Per-device (file) information
 struct Dev
 {
-	/// Memory mapped upstream device
-	const(ubyte)[] data;
+	/// File descriptor
+	int fd;
+	/// Size in bytes
+	ulong size;
 	/// First block index within the global block map
 	BlockIndex firstBlock;
 	/// File name of the device (in the upstream directory, and in the FUSE filesystem)
@@ -317,6 +319,7 @@ BlockRef hashBlock(const(ubyte)[] block, BlockRef br) nothrow
 
 	// Next, check if one of the blocks has the same contents
 	auto end = hashTableBucketLength - 1;
+	static ubyte[] blockBuf;
 	foreach (i, c; bucket)
 		if (c.empty)
 		{
@@ -325,7 +328,7 @@ BlockRef hashBlock(const(ubyte)[] block, BlockRef br) nothrow
 			break;
 		}
 		else
-		if (c.isHash(hashRemainder) && readBlock(c.blockRef) == block)
+		if (c.isHash(hashRemainder) && tryReadBlock(c.blockRef, blockBuf) == block)
 		{
 			// Cache hit - move to front
 			foreach_reverse (j; 0 .. i)
@@ -344,7 +347,8 @@ BlockRef hashBlock(const(ubyte)[] block, BlockRef br) nothrow
 /// Remove a block from the hash table.
 void unhashBlock(BlockRef br) nothrow
 {
-	auto block = readBlock(br);
+	static ubyte[] blockBuf, blockBuf2;
+	auto block = readBlock(br, blockBuf).assertNotThrown;
 	assert(block.length == blockSize);
 
 	auto hash = hashBytes(block);
@@ -360,7 +364,7 @@ void unhashBlock(BlockRef br) nothrow
 
 		if (c == cell)
 		{
-			assert(block == readBlock(c.blockRef), "Matched BlockRef but not data in hash table");
+			assert(block == tryReadBlock(c.blockRef, blockBuf2), "Matched BlockRef but not data in hash table");
 			assert(c.blockRef.type == BlockRef.Type.cow, "Unhashing non-COW block");
 			// Remove
 			foreach (j; i + 1 .. hashTableBucketLength)
@@ -768,34 +772,19 @@ if (isOutputRange!(W, char))
 // *****************************************************************************
 // I/O operations
 
-const(ubyte)[] zeroExpand(const(ubyte)[] block) nothrow
-{
-	if (block.length < blockSize)
-	{
-		// Zero-expand partial trailing blocks in memory
-		static ubyte[] buf;
-		if (!buf.length)
-			buf.length = blockSize;
-		buf[0 .. block.length] = block;
-		buf[block.length .. $] = 0;
-		block = buf[];
-	}
-	return block;
-}
-
 /// Read a block from a device and a given address.
-const(ubyte)[] readBlock(Dev* dev, size_t devBlockIndex) nothrow
+const(ubyte)[] readBlock(Dev* dev, size_t devBlockIndex, ref ubyte[] blockBuf)
 {
 	BlockIndex blockIndex = dev.firstBlock + devBlockIndex;
 	auto br = getBlockRef(blockIndex);
-	auto block = readBlock(br);
+	auto block = readBlock(br, blockBuf);
 	hashBlock(block, br);
 	return block;
 }
 
 /// Read a block using its reference
 /// (either from upstream or our COW store).
-const(ubyte)[] readBlock(BlockRef br) nothrow
+const(ubyte)[] readBlock(BlockRef br, ref ubyte[] blockBuf)
 {
 	final switch (br.type)
 	{
@@ -806,7 +795,20 @@ const(ubyte)[] readBlock(BlockRef br) nothrow
 			auto index = br.upstream;
 			auto dev = &findDev(index);
 			auto offset = (index - dev.firstBlock) * blockSize;
-			return dev.data[offset .. min(offset + blockSize, $)].zeroExpand;
+			blockBuf.length = blockSize;
+			ulong pos = 0;
+			do
+			{
+				auto bytesRead = pread(dev.fd, blockBuf.ptr + pos, blockSize - pos, offset);
+				errnoEnforce(bytesRead >= 0);
+				if (bytesRead == 0)
+				{
+					blockBuf[pos .. $] = 0; // Zero-expand
+					break;
+				}
+				pos += bytesRead;
+			} while (pos < blockSize);
+			return blockBuf;
 		}
 		case BlockRef.Type.cow:
 		{
@@ -818,7 +820,7 @@ const(ubyte)[] readBlock(BlockRef br) nothrow
 
 /// As above, but don't trust that `br` is valid.
 /// Return `null` if it isn't.
-const(ubyte)[] tryReadBlock(BlockRef br) nothrow
+const(ubyte)[] tryReadBlock(BlockRef br, ref ubyte[] blockBuf) nothrow
 {
 	final switch (br.type)
 	{
@@ -827,11 +829,16 @@ const(ubyte)[] tryReadBlock(BlockRef br) nothrow
 		case BlockRef.Type.upstream:
 			if (br.upstream >= totalBlocks)
 				return null;
-			return readBlock(br);
+			try
+				return readBlock(br, blockBuf);
+			catch (ErrnoException)
+				return null;
+			catch (Exception e)
+				assert(false, e.toString());
 		case BlockRef.Type.cow:
 			if (cowMap[br.cow].free)
 				return null;
-			return readBlock(br);
+			return readBlock(br, blockBuf).assertNotThrown;
 	}
 }
 
@@ -864,8 +871,9 @@ void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 	// Check if we can extend from the previous block.
 	if (blockIndex > 0)
 	{
+		static ubyte[] blockBuf;
 		auto extrapolatedBlockRef = getBlockRef(blockIndex - 1) + 1;
-		auto extrapolatedBlock = tryReadBlock(extrapolatedBlockRef);
+		auto extrapolatedBlock = tryReadBlock(extrapolatedBlockRef, blockBuf);
 		if (extrapolatedBlock && extrapolatedBlock == block)
 		{
 			referenceBlock(extrapolatedBlockRef);
@@ -1027,7 +1035,7 @@ extern(C) nothrow
 				{
 					auto dev = getDev(path);
 					if (!dev) return -ENOENT;
-					s.st_size = dev.data.length;
+					s.st_size = dev.size;
 					s.st_mode = S_IFREG | S_IRUSR | S_IWUSR;
 				}
 				else
@@ -1144,13 +1152,26 @@ extern(C) nothrow
 			if (devIndex >= devs.length) return -EBADFD;
 			auto dev = &devs[devIndex];
 
-			auto end = min(offset + size, dev.data.length);
+			auto end = min(offset + size, dev.size);
 			if (offset >= end)
 				return 0;
 			auto head = buf.ptr;
 			foreach (blockOffset; offset / blockSize .. (end - 1) / blockSize + 1)
 			{
-				auto block = dev.readBlock(blockOffset);
+				const(ubyte)[] block;
+				static ubyte[] blockBuf;
+				try
+					block = dev.readBlock(blockOffset, blockBuf);
+				catch (ErrnoException e)
+				{
+					auto pos = head - buf.ptr;
+					if (pos == 0)
+						return -e.errno;
+					else
+						return cast(int)pos;
+				}
+				catch (Exception e)
+					assert(false, e.toString());
 				auto blockStart = blockOffset * blockSize;
 				auto blockEnd = blockStart + blockSize;
 				auto spanStart = max(blockStart, offset);
@@ -1177,7 +1198,7 @@ extern(C) nothrow
 			auto dev = &devs[devIndex];
 
 			auto data = (cast(ubyte*)data_ptr)[0 .. size];
-			auto end = min(offset + size, dev.data.length);
+			auto end = min(offset + size, dev.size);
 			if (offset >= end)
 				return 0;
 			auto head = data.ptr;
@@ -1196,12 +1217,21 @@ extern(C) nothrow
 				else
 				{
 					// Read-modify-write
-					static ubyte[] buf;
-					if (!buf.length)
-						buf.length = blockSize;
-					buf[] = dev.readBlock(blockOffset);
-					buf[spanStart - blockStart .. spanEnd - blockStart] = head[0 .. len];
-					dev.writeBlock(blockOffset, buf[]);
+					static ubyte[] blockBuf;
+					try
+						dev.readBlock(blockOffset, blockBuf);
+					catch (ErrnoException e)
+					{
+						auto pos = head - data.ptr;
+						if (pos == 0)
+							return -e.errno;
+						else
+							return cast(int)pos;
+					}
+					catch (Exception e)
+						assert(false, e.toString());
+					blockBuf[spanStart - blockStart .. spanEnd - blockStart] = head[0 .. len];
+					dev.writeBlock(blockOffset, blockBuf[]);
 				}
 				head += len;
 			}
@@ -1252,13 +1282,11 @@ void thincow(
 		auto numBlocks = (deviceSize + blockSize - 1) / blockSize;
 		stderr.writeln(deviceSize, " bytes (", numBlocks, " blocks)");
 
-		auto ptr = cast(const(ubyte)*)mmap(null, deviceSize, PROT_READ, MAP_PRIVATE, fd, 0);
-		errnoEnforce(ptr != MAP_FAILED, "mmap failed");
-
 		Dev dev;
 		dev.name = de.baseName;
 		dev.firstBlock = totalBlocks;
-		dev.data = ptr[0 .. deviceSize];
+		dev.size = deviceSize;
+		dev.fd = fd;
 		devs ~= dev;
 		totalBlocks += numBlocks;
 	});
