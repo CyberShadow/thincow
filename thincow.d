@@ -110,7 +110,7 @@ Globals* globals;
 // *****************************************************************************
 // Stats
 
-size_t writesTotal, writesDeduplicated;
+size_t writesTotal, writesDeduplicatedHash, writesDeduplicatedExtend;
 
 template dumpStats(bool full)
 {
@@ -163,8 +163,13 @@ template dumpStats(bool full)
 				);
 			}
 		}}
+		auto writesDeduplicated = writesDeduplicatedHash + writesDeduplicatedExtend;
 		writer.formattedWrite!"Blocks written: %d total, %d (%d bytes, %.0f%%) deduplicated\n"
 			(writesTotal, writesDeduplicated, writesDeduplicated * blockSize, writesDeduplicated * 100.0 / writesTotal);
+		writer.formattedWrite!"Duplicate detection method: Hash table: %d (%.0f%%), extent extension: %d (%.0f%%)\n"(
+			writesDeduplicatedHash, writesDeduplicatedHash * 100.0 / writesDeduplicated,
+			writesDeduplicatedExtend, writesDeduplicatedExtend * 100.0 / writesDeduplicated,
+		);
 		static if (full)
 		{
 			size_t spaceSavedUpstream;
@@ -889,7 +894,7 @@ void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 		{
 			referenceBlock(extrapolatedBlockRef);
 			putBlockRef(blockIndex, extrapolatedBlockRef);
-			writesDeduplicated++;
+			writesDeduplicatedExtend++;
 			writesTotal++;
 			return;
 		}
@@ -921,7 +926,7 @@ void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 	else
 	{
 		referenceBlock(result);
-		writesDeduplicated++;
+		writesDeduplicatedHash++;
 	}
 	putBlockRef(blockIndex, result);
 	writesTotal++;
