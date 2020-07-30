@@ -1015,7 +1015,7 @@ void dumpToStderr(alias fun)(string prefix) nothrow
 	}().assertNotThrown();
 }
 
-uint64_t makeFile(alias fun)() nothrow
+void makeFile(alias fun)(fuse_file_info* fi) nothrow
 {
 	Appender!string appender;
 	try
@@ -1024,7 +1024,8 @@ uint64_t makeFile(alias fun)() nothrow
 		put(appender, e.toString().assertNotThrown());
 	auto fd = nextFileIndex++;
 	files[fd] = appender.data;
-	return fd;
+	fi.fh = fd;
+	fi.direct_io = true;
 }
 
 extern(C) nothrow
@@ -1114,16 +1115,16 @@ extern(C) nothrow
 				fi.fh = FuseHandle.debugDir;
 				return 0;
 			case "/debug/btree.txt":
-				fi.fh = makeFile!dumpBtree();
+				makeFile!dumpBtree(fi);
 				return 0;
 			case "/debug/cow.txt":
-				fi.fh = makeFile!dumpCOW();
+				makeFile!dumpCOW(fi);
 				return 0;
 			case "/stats.txt":
-				fi.fh = makeFile!(dumpStats!false)();
+				makeFile!(dumpStats!false)(fi);
 				return 0;
 			case "/stats-full.txt":
-				fi.fh = makeFile!(dumpStats!true)();
+				makeFile!(dumpStats!true)(fi);
 				return 0;
 			default:
 				if (path.startsWith("/devs/"))
