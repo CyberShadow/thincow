@@ -122,7 +122,7 @@ template dumpStats(bool full)
 		writer.formattedWrite!"Current B-tree root: %d\n"(globals.btreeRoot);
 		writer.formattedWrite!"Devices:\n"();
 		foreach (i, ref dev; devs)
-			writer.formattedWrite!"\tDevice #%d: %(%s%), %d bytes, first block: %d\n"(i, dev.name.only, dev.size, dev.firstBlock);
+			writer.formattedWrite!"\tDevice #%d: %(%s%), %d bytes, first block: %d, %d read errors\n"(i, dev.name.only, dev.size, dev.firstBlock, dev.errors);
 		writer.formattedWrite!"Hash table: %d buckets (%d bytes), %d entries per bucket (%d bytes)\n"
 			(hashTable.length, hashTable.length * HashTableBucket.sizeof, hashTableBucketLength, hashTableBucketSize);
 		static if (full)
@@ -230,6 +230,8 @@ struct Dev
 	BlockIndex firstBlock;
 	/// File name of the device (in the upstream directory, and in the FUSE filesystem)
 	string name;
+	/// Read errors
+	ulong errors;
 }
 Dev[] devs;
 
@@ -800,7 +802,11 @@ const(ubyte)[] readBlock(BlockRef br, ref ubyte[] blockBuf)
 			do
 			{
 				auto bytesRead = pread(dev.fd, blockBuf.ptr + pos, blockSize - pos, offset);
-				errnoEnforce(bytesRead >= 0);
+				if (bytesRead < 0)
+				{
+					dev.errors++;
+					throw new ErrnoException(null);
+				}
 				if (bytesRead == 0)
 				{
 					blockBuf[pos .. $] = 0; // Zero-expand
