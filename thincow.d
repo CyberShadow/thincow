@@ -22,6 +22,7 @@ import core.sys.posix.unistd;
 
 import std.algorithm.comparison;
 import std.algorithm.iteration;
+import std.algorithm.searching;
 import std.array;
 import std.digest.crc;
 import std.exception;
@@ -119,6 +120,10 @@ template dumpStats(bool full)
 		writer.formattedWrite!"Block size: %d\n"(blockSize);
 		writer.formattedWrite!"Total blocks: %d (%d bytes)\n"(totalBlocks, totalBlocks * blockSize);
 		writer.formattedWrite!"B-tree nodes: %d (%d bytes)\n"(globals.btreeLength, globals.btreeLength * BTreeNode.sizeof);
+		writer.formattedWrite!"B-tree depth: %d\n"(
+			(&blockMap[globals.btreeRoot])
+			.recurrence!((state, i) => state[0] && !state[0].isLeaf ? &blockMap[state[0].elems[0].childIndex] : null)
+			.countUntil(null));
 		writer.formattedWrite!"Current B-tree root: %d\n"(globals.btreeRoot);
 		writer.formattedWrite!"Devices:\n"();
 		foreach (i, ref dev; devs)
