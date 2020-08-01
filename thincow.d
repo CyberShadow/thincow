@@ -122,6 +122,9 @@ template dumpStats(bool full)
 	{
 		writer.formattedWrite!"Block size: %d\n"(blockSize);
 		writer.formattedWrite!"Total blocks: %d (%d bytes)\n"(totalBlocks, totalBlocks * blockSize);
+		writer.formattedWrite!"Devices:\n"();
+		foreach (i, ref dev; devs)
+			writer.formattedWrite!"\tDevice #%d: %(%s%), %d bytes, first block: %d, %d read errors\n"(i, dev.name.only, dev.size, dev.firstBlock, dev.errors);
 		writer.formattedWrite!"B-tree nodes: %d (%d bytes)\n"(globals.btreeLength, globals.btreeLength * BTreeNode.sizeof);
 		auto btreeDepth = (&blockMap[globals.btreeRoot])
 			.recurrence!((state, i) => state[0] && !state[0].isLeaf ? &blockMap[state[0].elems[0].childIndex] : null)
@@ -177,9 +180,6 @@ template dumpStats(bool full)
 				);
 			}
 		}}
-		writer.formattedWrite!"Devices:\n"();
-		foreach (i, ref dev; devs)
-			writer.formattedWrite!"\tDevice #%d: %(%s%), %d bytes, first block: %d, %d read errors\n"(i, dev.name.only, dev.size, dev.firstBlock, dev.errors);
 		writer.formattedWrite!"Hash table: %d buckets (%d bytes), %d entries per bucket (%d bytes)\n"
 			(hashTable.length, hashTable.length * HashTableBucket.sizeof, hashTableBucketLength, hashTableBucketSize);
 		static if (full)
