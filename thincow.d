@@ -168,9 +168,10 @@ template dumpStats(bool full)
 				auto btreeDepthNodes = btreeFullness[depth][].sum; // Total nodes at this depth
 				auto btreeDepthTotal = btreeDepthNodes * btreeNodeLength;
 				auto maxCount = btreeFullness[depth].reduce!max;
-				writer.formattedWrite!"\tLevel %d: [%s] (total: %d/%d, average: %.0f%%)\n"(
+				writer.formattedWrite!"\tLevel %d: [%s] (%d nodes, %d/%d slots used, average: %.0f%%)\n"(
 					depth,
 					btreeFullness[depth][].map!(f => f ? ".oO@"[f * ($ - 1) / maxCount] : ' '),
+					btreeDepthNodes,
 					btreeDepthUsed[depth], btreeDepthTotal,
 					btreeDepthUsed[depth] * 100.0 / btreeDepthTotal,
 				);
