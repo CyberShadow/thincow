@@ -40,7 +40,7 @@ import c.fuse.fuse;
 import ae.sys.file;
 import ae.utils.funopt;
 import ae.utils.main;
-import ae.utils.math;
+import ae.utils.math : roundUpToPowerOfTwo;
 
 __gshared: // disable TLS
 
@@ -123,10 +123,10 @@ template dumpStats(bool full)
 		writer.formattedWrite!"Block size: %d\n"(blockSize);
 		writer.formattedWrite!"Total blocks: %d (%d bytes)\n"(totalBlocks, totalBlocks * blockSize);
 		writer.formattedWrite!"B-tree nodes: %d (%d bytes)\n"(globals.btreeLength, globals.btreeLength * BTreeNode.sizeof);
-		writer.formattedWrite!"B-tree depth: %d\n"(
-			(&blockMap[globals.btreeRoot])
+		auto btreeDepth = (&blockMap[globals.btreeRoot])
 			.recurrence!((state, i) => state[0] && !state[0].isLeaf ? &blockMap[state[0].elems[0].childIndex] : null)
-			.countUntil(null));
+			.countUntil(null);
+		writer.formattedWrite!"B-tree depth: %d\n"(btreeDepth);
 		writer.formattedWrite!"Current B-tree root: %d\n"(globals.btreeRoot);
 		writer.formattedWrite!"Devices:\n"();
 		foreach (i, ref dev; devs)
@@ -177,8 +177,17 @@ template dumpStats(bool full)
 		static if (full)
 		{
 			size_t spaceSavedUpstream;
-			void scan(in ref BTreeNode node, BlockIndex start, BlockIndex end)
+
+			// Plot: y -> depth, x -> fullness, plot[x,y] -> count with this fullness
+			enum btreeFullnessCountBuckets = min(btreeNodeLength, 16);
+			auto btreeFullness = new size_t[btreeFullnessCountBuckets][btreeDepth];
+			auto btreeDepthUsed  = new size_t[btreeDepth];
+
+			void scan(in ref BTreeNode node, BlockIndex start, BlockIndex end, size_t depth)
 			{
+				btreeFullness[depth][node.count * btreeFullnessCountBuckets / btreeNodeLength]++;
+				btreeDepthUsed[depth] += 1 + node.count;
+
 				foreach (elemIndex, ref elem; node.elems[0 .. node.count + 1])
 				{
 					auto elemStart = elemIndex ? elem.firstBlockIndex : start;
@@ -189,11 +198,30 @@ template dumpStats(bool full)
 							spaceSavedUpstream += elemEnd - elemStart;
 					}
 					else
-						scan(blockMap[elem.childIndex], elemStart, elemEnd);
+						scan(blockMap[elem.childIndex], elemStart, elemEnd, depth + 1);
 				}
 			}
-			scan(blockMap[globals.btreeRoot], 0, totalBlocks);
+			scan(blockMap[globals.btreeRoot], 0, totalBlocks, 0);
 		}
+		static if (full)
+		{{
+			auto btreeTotal = globals.btreeLength * btreeNodeLength;
+			auto btreeUsed = btreeDepthUsed.sum;
+			writer.formattedWrite!"B-tree occupancy: %d/%d (%d%%)\n"
+				(btreeUsed, btreeTotal, btreeUsed * 100 / btreeTotal);
+			foreach (depth; 0 .. btreeDepth)
+			{
+				auto btreeDepthNodes = btreeFullness[depth][].sum; // Total nodes at this depth
+				auto btreeDepthTotal = btreeDepthNodes * btreeNodeLength;
+				auto maxCount = btreeFullness[depth].reduce!max;
+				writer.formattedWrite!"\tLevel %d: [%s] (total: %d/%d, average: %.0f%%)\n"(
+					depth,
+					btreeFullness[depth][].map!(f => f ? ".oO@"[f * ($ - 1) / maxCount] : ' '),
+					btreeDepthUsed[depth], btreeDepthTotal,
+					btreeDepthUsed[depth] * 100.0 / btreeDepthTotal,
+				);
+			}
+		}}
 		static if (full)
 		{{
 			size_t cowFreeListLength = 0;
@@ -462,7 +490,7 @@ union BTreeNode
 	/// element 0 would be otherwise.
 	struct
 	{
-		uint count;  /// Number of keys in this B-tree node (1 - number of elements)
+		uint count;  /// Number of keys in this B-tree node (number of elements - 1)
 		bool isLeaf; /// Is this B-tree node a leaf node?
 	}
 	BTreeElement[btreeNodeLength] elems;
