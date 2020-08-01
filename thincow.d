@@ -128,52 +128,6 @@ template dumpStats(bool full)
 			.countUntil(null);
 		writer.formattedWrite!"B-tree depth: %d\n"(btreeDepth);
 		writer.formattedWrite!"Current B-tree root: %d\n"(globals.btreeRoot);
-		writer.formattedWrite!"Devices:\n"();
-		foreach (i, ref dev; devs)
-			writer.formattedWrite!"\tDevice #%d: %(%s%), %d bytes, first block: %d, %d read errors\n"(i, dev.name.only, dev.size, dev.firstBlock, dev.errors);
-		writer.formattedWrite!"Hash table: %d buckets (%d bytes), %d entries per bucket (%d bytes)\n"
-			(hashTable.length, hashTable.length * HashTableBucket.sizeof, hashTableBucketLength, hashTableBucketSize);
-		static if (full)
-		{{
-			size_t totalUsed;
-			size_t[hashTableBucketLength + 1] fullnessCounts;
-			foreach (ref bucket; hashTable)
-			{
-				size_t emptyIndex = hashTableBucketLength;
-				foreach (i, hbr; bucket)
-					if (hbr.empty)
-					{
-						emptyIndex = i;
-						break;
-					}
-					else
-						totalUsed++;
-				fullnessCounts[emptyIndex]++;
-			}
-			auto totalSlots = hashTableBucketLength * hashTable.length;
-			writer.formattedWrite!"Hash table occupancy: %d/%d (%d%%)\n"
-				(totalUsed, totalSlots, totalUsed * 100 / totalSlots);
-			auto maxCount = fullnessCounts[].reduce!max;
-			foreach (i, count; fullnessCounts)
-			{
-				enum maxWidth = 40;
-				auto width = count * maxWidth / maxCount;
-				writer.formattedWrite!"\t%d slots: %s%s %d buckets\n"(
-					i,
-					leftJustifier("",            width, '#'),
-					leftJustifier("", maxWidth - width, '.'),
-					count,
-				);
-			}
-		}}
-		auto writesDeduplicated = writesDeduplicatedHash + writesDeduplicatedExtend + writesDeduplicatedRetroactive;
-		writer.formattedWrite!"Blocks written: %d total, %d (%d bytes, %.0f%%) deduplicated\n"
-			(writesTotal, writesDeduplicated, writesDeduplicated * blockSize, writesDeduplicated * 100.0 / writesTotal);
-		writer.formattedWrite!"Duplicate detection method: Hash table: %d (%.0f%%), extent extension: %d (%.0f%%), retroactive: %d (%.0f%%)\n"(
-			writesDeduplicatedHash       , writesDeduplicatedHash        * 100.0 / writesDeduplicated,
-			writesDeduplicatedExtend     , writesDeduplicatedExtend      * 100.0 / writesDeduplicated,
-			writesDeduplicatedRetroactive, writesDeduplicatedRetroactive * 100.0 / writesDeduplicated,
-		);
 		static if (full)
 		{
 			size_t spaceSavedUpstream;
@@ -222,6 +176,52 @@ template dumpStats(bool full)
 				);
 			}
 		}}
+		writer.formattedWrite!"Devices:\n"();
+		foreach (i, ref dev; devs)
+			writer.formattedWrite!"\tDevice #%d: %(%s%), %d bytes, first block: %d, %d read errors\n"(i, dev.name.only, dev.size, dev.firstBlock, dev.errors);
+		writer.formattedWrite!"Hash table: %d buckets (%d bytes), %d entries per bucket (%d bytes)\n"
+			(hashTable.length, hashTable.length * HashTableBucket.sizeof, hashTableBucketLength, hashTableBucketSize);
+		static if (full)
+		{{
+			size_t totalUsed;
+			size_t[hashTableBucketLength + 1] fullnessCounts;
+			foreach (ref bucket; hashTable)
+			{
+				size_t emptyIndex = hashTableBucketLength;
+				foreach (i, hbr; bucket)
+					if (hbr.empty)
+					{
+						emptyIndex = i;
+						break;
+					}
+					else
+						totalUsed++;
+				fullnessCounts[emptyIndex]++;
+			}
+			auto totalSlots = hashTableBucketLength * hashTable.length;
+			writer.formattedWrite!"Hash table occupancy: %d/%d (%d%%)\n"
+				(totalUsed, totalSlots, totalUsed * 100 / totalSlots);
+			auto maxCount = fullnessCounts[].reduce!max;
+			foreach (i, count; fullnessCounts)
+			{
+				enum maxWidth = 40;
+				auto width = count * maxWidth / maxCount;
+				writer.formattedWrite!"\t%d slots: %s%s %d buckets\n"(
+					i,
+					leftJustifier("",            width, '#'),
+					leftJustifier("", maxWidth - width, '.'),
+					count,
+				);
+			}
+		}}
+		auto writesDeduplicated = writesDeduplicatedHash + writesDeduplicatedExtend + writesDeduplicatedRetroactive;
+		writer.formattedWrite!"Blocks written: %d total, %d (%d bytes, %.0f%%) deduplicated\n"
+			(writesTotal, writesDeduplicated, writesDeduplicated * blockSize, writesDeduplicated * 100.0 / writesTotal);
+		writer.formattedWrite!"Duplicate detection method: Hash table: %d (%.0f%%), extent extension: %d (%.0f%%), retroactive: %d (%.0f%%)\n"(
+			writesDeduplicatedHash       , writesDeduplicatedHash        * 100.0 / writesDeduplicated,
+			writesDeduplicatedExtend     , writesDeduplicatedExtend      * 100.0 / writesDeduplicated,
+			writesDeduplicatedRetroactive, writesDeduplicatedRetroactive * 100.0 / writesDeduplicated,
+		);
 		static if (full)
 		{{
 			size_t cowFreeListLength = 0;
