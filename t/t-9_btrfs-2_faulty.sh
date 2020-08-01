@@ -72,6 +72,7 @@ losetup -d "${loops[@]}"
 stop_thincow
 
 dmsetup status thincow-dust
+sleep 1
 dmsetup remove thincow-dust
 losetup -d "$orig_loop"
 
