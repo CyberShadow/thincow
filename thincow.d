@@ -108,6 +108,8 @@ struct Globals
 }
 Globals* globals;
 
+bool retroactiveDeduplication;
+
 // *****************************************************************************
 // Stats
 
@@ -953,33 +955,34 @@ void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 	writesTotal++;
 
 	// Check if we can retroactively deduplicate the previous block
-	while (blockIndex > 0 && result.offset > 0)
-	{
-		auto extrapolatedBlockRef = BlockRef(result.type, result.offset - 1);
-		auto prevBlockIndex = blockIndex - 1;
-		auto prevBlockRef = getBlockRef(prevBlockIndex);
-		if (prevBlockRef == extrapolatedBlockRef)
-			break; // Already contiguous
-		if (prevBlockRef.type != BlockRef.Type.cow)
-			break; // No need to deduplicate/defragment if it already points to upstream
-		static ubyte[] blockBuf1, blockBuf2;
-		auto block1 = tryReadBlock(prevBlockRef, blockBuf1);
-		if (!block1)
-			break; // Read error
-		auto block2 = tryReadBlock(extrapolatedBlockRef, blockBuf2);
-		if (!block2)
-			break; // Read error
-		if (block1 != block2)
-			break; // Not the same data
-		unreferenceBlock(prevBlockRef);
-		putBlockRef(prevBlockIndex, extrapolatedBlockRef);
-		writesDeduplicatedRetroactive++;
-		writesTotal++; // "Fake" write, to keep deduplication % sane
+	if (retroactiveDeduplication)
+		while (blockIndex > 0 && result.offset > 0)
+		{
+			auto extrapolatedBlockRef = BlockRef(result.type, result.offset - 1);
+			auto prevBlockIndex = blockIndex - 1;
+			auto prevBlockRef = getBlockRef(prevBlockIndex);
+			if (prevBlockRef == extrapolatedBlockRef)
+				break; // Already contiguous
+			if (prevBlockRef.type != BlockRef.Type.cow)
+				break; // No need to deduplicate/defragment if it already points to upstream
+			static ubyte[] blockBuf1, blockBuf2;
+			auto block1 = tryReadBlock(prevBlockRef, blockBuf1);
+			if (!block1)
+				break; // Read error
+			auto block2 = tryReadBlock(extrapolatedBlockRef, blockBuf2);
+			if (!block2)
+				break; // Read error
+			if (block1 != block2)
+				break; // Not the same data
+			unreferenceBlock(prevBlockRef);
+			putBlockRef(prevBlockIndex, extrapolatedBlockRef);
+			writesDeduplicatedRetroactive++;
+			writesTotal++; // "Fake" write, to keep deduplication % sane
 
-		// Keep going
-		blockIndex = prevBlockIndex;
-		result = extrapolatedBlockRef;
-	}
+			// Keep going
+			blockIndex = prevBlockIndex;
+			result = extrapolatedBlockRef;
+		}
 }
 
 /// Indicates that we are now using one more reference to the given block.
@@ -1326,6 +1329,7 @@ void thincow(
 	Option!(size_t, "Hash table size.\nThe default is 1073741824 (1 GiB).", "BYTES") hashTableSize = 1024*1024*1024,
 	Option!(size_t, "Maximum size of the block map.", "BYTES") maxBlockMapSize = 1L << 63,
 	Option!(size_t, "Maximum number of blocks in the COW store.", "BLOCKS") maxCowBlocks = 1L << 63,
+	Switch!("Enable retroactive deduplication (more I/O intensive).") retroactive = false,
 	Switch!("Run in foreground.", 'f') foreground = false,
 	Option!(string[], "Additional FUSE options (e.g. debug).", "STR", 'o') options = null,
 )
@@ -1336,6 +1340,7 @@ void thincow(
 		metadataDir = dataDir;
 
 	.blockSize = blockSize;
+	.retroactiveDeduplication = retroactive;
 
 	upstream.value.listDir!((de)
 	{

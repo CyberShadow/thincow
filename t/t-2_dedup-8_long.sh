@@ -10,7 +10,7 @@ run_thincow
 dd if=target/devs/test of=/dev/null bs=$block_size status=none # populate hash table
 dd if=/dev/zero of=target/devs/test bs=$block_size status=none count=$block_count conv=notrunc # wipe
 stop_thincow
-run_thincow
+run_thincow --retroactive
 dd if=upstream/test of=target/devs/test bs=$block_size status=none conv=notrunc # deduplicate
 grep -qF 'Total COW references: 0 blocks (0 bytes)' target/stats-full.txt
 stop_thincow
