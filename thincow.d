@@ -28,6 +28,7 @@ import std.digest.crc;
 import std.exception;
 import std.file;
 import std.format;
+import std.math;
 import std.path;
 import std.range;
 import std.range.primitives;
@@ -275,11 +276,18 @@ struct HashTableCell
 {
 	ulong value = 0;
 
+	void toString(W)(ref W writer) const
+	if (isOutputRange!(W, char))
+	{
+		auto hashBitHexDigits = (value.sizeof * 8 - blockRefBits + 3) / 4;
+		writer.formattedWrite!"[0x%0*x] %s"(hashBitHexDigits, value >> blockRefBits, blockRef);
+	}
+
 nothrow @nogc:
 	bool empty() const { return value == 0; }
 	private static ulong blockRefMask() { return ((1UL << blockRefBits) - 1UL); }
 	this(BlockRef br, ulong hashBits) { assert((br.value & ~blockRefMask) == 0); value = br.value | (hashBits << blockRefBits); }
-	@property BlockRef blockRef() { BlockRef br; br.value = value & blockRefMask; return br; }
+	@property BlockRef blockRef() const { BlockRef br; br.value = value & blockRefMask; return br; }
 	bool isHash(ulong hashBits) const { return (hashBits << blockRefBits) == (value & ~blockRefMask); }
 }
 
@@ -388,6 +396,18 @@ void unhashBlock(BlockRef br) nothrow
 			bucket[hashTableBucketLength - 1] = HashTableCell.init;
 			return;
 		}
+	}
+}
+
+void dumpHashTable(W)(ref W writer)
+if (isOutputRange!(W, char))
+{
+	auto bucketIndexHexDigits = (3 + cast(uint)ceil(log2(hashTable.length))) / 4;
+	foreach (bucketIndex, ref bucket; hashTable)
+	{
+		writer.formattedWrite!"Bucket 0x%0*x:\n"(bucketIndexHexDigits, bucketIndex);
+		foreach (i, c; bucket)
+			writer.formattedWrite!"\tSlot %d: %s\n"(i, c);
 	}
 }
 
@@ -1042,6 +1062,7 @@ extern(C) nothrow
 				break;
 			case "/debug/btree.txt":
 			case "/debug/cow.txt":
+			case "/debug/hash-table.txt":
 			case "/stats.txt":
 			case "/stats-full.txt":
 				s.st_mode = S_IFREG | S_IRUSR;
@@ -1090,6 +1111,7 @@ extern(C) nothrow
 				static immutable char*[] debugDir = [
 					"btree.txt",
 					"cow.txt",
+					"hash-table.txt",
 				];
 				foreach (d; debugDir)
 					filler(buf, cast(char*)d, null, 0);
@@ -1119,6 +1141,9 @@ extern(C) nothrow
 				return 0;
 			case "/debug/cow.txt":
 				makeFile!dumpCOW(fi);
+				return 0;
+			case "/debug/hash-table.txt":
+				makeFile!dumpHashTable(fi);
 				return 0;
 			case "/stats.txt":
 				makeFile!(dumpStats!false)(fi);
