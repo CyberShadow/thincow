@@ -111,7 +111,7 @@ Globals* globals;
 // *****************************************************************************
 // Stats
 
-size_t writesTotal, writesDeduplicatedHash, writesDeduplicatedExtend;
+size_t writesTotal, writesDeduplicatedHash, writesDeduplicatedExtend, writesDeduplicatedRetroactive;
 
 template dumpStats(bool full)
 {
@@ -164,12 +164,13 @@ template dumpStats(bool full)
 				);
 			}
 		}}
-		auto writesDeduplicated = writesDeduplicatedHash + writesDeduplicatedExtend;
+		auto writesDeduplicated = writesDeduplicatedHash + writesDeduplicatedExtend + writesDeduplicatedRetroactive;
 		writer.formattedWrite!"Blocks written: %d total, %d (%d bytes, %.0f%%) deduplicated\n"
 			(writesTotal, writesDeduplicated, writesDeduplicated * blockSize, writesDeduplicated * 100.0 / writesTotal);
-		writer.formattedWrite!"Duplicate detection method: Hash table: %d (%.0f%%), extent extension: %d (%.0f%%)\n"(
-			writesDeduplicatedHash, writesDeduplicatedHash * 100.0 / writesDeduplicated,
-			writesDeduplicatedExtend, writesDeduplicatedExtend * 100.0 / writesDeduplicated,
+		writer.formattedWrite!"Duplicate detection method: Hash table: %d (%.0f%%), extent extension: %d (%.0f%%), retroactive: %d (%.0f%%)\n"(
+			writesDeduplicatedHash       , writesDeduplicatedHash        * 100.0 / writesDeduplicated,
+			writesDeduplicatedExtend     , writesDeduplicatedExtend      * 100.0 / writesDeduplicated,
+			writesDeduplicatedRetroactive, writesDeduplicatedRetroactive * 100.0 / writesDeduplicated,
 		);
 		static if (full)
 		{
@@ -950,6 +951,35 @@ void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 	}
 	putBlockRef(blockIndex, result);
 	writesTotal++;
+
+	// Check if we can retroactively deduplicate the previous block
+	while (blockIndex > 0 && result.offset > 0)
+	{
+		auto extrapolatedBlockRef = BlockRef(result.type, result.offset - 1);
+		auto prevBlockIndex = blockIndex - 1;
+		auto prevBlockRef = getBlockRef(prevBlockIndex);
+		if (prevBlockRef == extrapolatedBlockRef)
+			break; // Already contiguous
+		if (prevBlockRef.type != BlockRef.Type.cow)
+			break; // No need to deduplicate/defragment if it already points to upstream
+		static ubyte[] blockBuf1, blockBuf2;
+		auto block1 = tryReadBlock(prevBlockRef, blockBuf1);
+		if (!block1)
+			break; // Read error
+		auto block2 = tryReadBlock(extrapolatedBlockRef, blockBuf2);
+		if (!block2)
+			break; // Read error
+		if (block1 != block2)
+			break; // Not the same data
+		unreferenceBlock(prevBlockRef);
+		putBlockRef(prevBlockIndex, extrapolatedBlockRef);
+		writesDeduplicatedRetroactive++;
+		writesTotal++; // "Fake" write, to keep deduplication % sane
+
+		// Keep going
+		blockIndex = prevBlockIndex;
+		result = extrapolatedBlockRef;
+	}
 }
 
 /// Indicates that we are now using one more reference to the given block.
