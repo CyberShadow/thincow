@@ -24,6 +24,8 @@ import std.algorithm.comparison;
 import std.algorithm.iteration;
 import std.algorithm.searching;
 import std.array;
+import std.bitmanip;
+import std.conv;
 import std.digest.crc;
 import std.exception;
 import std.file;
@@ -108,7 +110,9 @@ struct Globals
 }
 Globals* globals;
 
+/// Command-line options.
 bool retroactiveDeduplication;
+bool readOnlyUpstream;
 
 // *****************************************************************************
 // Stats
@@ -417,7 +421,6 @@ void unhashBlock(BlockRef br) nothrow
 		if (c == cell)
 		{
 			assert(block == tryReadBlock(c.blockRef, blockBuf2), "Matched BlockRef but not data in hash table");
-			assert(c.blockRef.type == BlockRef.Type.cow, "Unhashing non-COW block");
 			// Remove
 			foreach (j; i + 1 .. hashTableBucketLength)
 			{
@@ -880,6 +883,245 @@ if (isOutputRange!(W, char))
 }
 
 // *****************************************************************************
+// Flushing
+
+/// Return type of `findDirty`.
+struct DirtyExtent
+{
+	/// Target block index of the first dirty block.
+	BlockIndex blockIndex;
+	/// What the block points to.
+	BlockRef blockRef;
+	/// Length of this extent.
+	BlockIndex length;
+
+	/// Return value of `findDirty` when nothing was found.
+	static immutable notFound = DirtyExtent(-1UL);
+}
+
+/// Finds the first dirty extent (blocks which would need to be flushed),
+/// assuming that all blocks before `start` are clean.
+/// If there are no dirty blocks at/after `start`,
+/// returns `DirtyBlock.notFound`.
+DirtyExtent findDirty(BlockIndex start)
+{
+	if (start == totalBlocks)
+		return DirtyExtent.notFound;
+	assert(start < totalBlocks);
+
+	static DirtyExtent search(ref BTreeNode node, BlockIndex searchStart, BlockIndex nodeStart, BlockIndex nodeEnd) nothrow @nogc
+	{
+		for (auto elemIndex = searchStart ? node.find(searchStart) : 0; elemIndex <= node.count; elemIndex++)
+		{
+			auto elem = &node.elems[elemIndex];
+			auto elemStart = elemIndex ? elem.firstBlockIndex : nodeStart;
+			auto elemEnd = elemIndex < node.count ? node.elems[elemIndex + 1].firstBlockIndex : nodeEnd;
+			if (node.isLeaf)
+			{
+				if (elem.firstBlockRef.type != BlockRef.Type.upstream || elem.firstBlockRef.upstream != elemStart)
+				{
+					auto elemLen = elemEnd - elemStart;
+					return DirtyExtent(elemStart, elem.firstBlockRef, elemLen);
+				}
+			}
+			else
+			{
+				auto res = search(blockMap[elem.childIndex], searchStart, elemStart, elemEnd);
+				if (res !is DirtyExtent.notFound)
+					return res;
+			}
+
+			searchStart = 0;
+		}
+		return DirtyExtent.notFound;
+	}
+
+	return search(blockMap[globals.btreeRoot], start, 0, totalBlocks);
+}
+
+/// Which upstream blocks are "in use".
+BitArray useMap; // TODO: could be more efficiently (but with more complexity) represented as a tree of ranges
+
+/// Flush at most `numBlocks` blocks.
+void flush(BlockIndex blocksToFlush)
+{
+	static ubyte[] blockBuf;
+
+	stderr.writefln("Flushing at most %d blocks.", blocksToFlush);
+	flushError = null;
+
+	useMap[] = false;
+	stderr.writeln("Collecting usage information...");
+
+	void scan(ref BTreeNode node, BlockIndex nodeStart, BlockIndex nodeEnd)
+	{
+		foreach (elemIndex, ref elem; node.elems[0 .. 1 + node.count])
+		{
+			auto elemStart = elemIndex ? elem.firstBlockIndex : nodeStart;
+			auto elemEnd = elemIndex < node.count ? node.elems[elemIndex + 1].firstBlockIndex : nodeEnd;
+			if (node.isLeaf)
+			{
+				if (elem.firstBlockRef.type == BlockRef.Type.upstream)
+				{
+					auto elemLen = elemEnd - elemStart;
+					auto useStart = elem.firstBlockRef.upstream;
+					auto useEnd = useStart + elemLen;
+					useMap[useStart .. useEnd] = true;
+				}
+			}
+			else
+				scan(blockMap[elem.childIndex], elemStart, elemEnd);
+		}
+	}
+	scan(blockMap[globals.btreeRoot], 0, totalBlocks);
+
+	stderr.writeln("Flushing...");
+	BlockIndex pos = 0;
+	BlockIndex blocksFlushed = 0;
+	while (blocksToFlush > 0)
+	{
+		auto dirty = findDirty(pos);
+		if (dirty is DirtyExtent.notFound)
+			break;
+
+		foreach (i; 0 .. dirty.length)
+		{
+			auto blockIndex = dirty.blockIndex + i;
+			if (useMap[blockIndex])
+				continue; // Can't overwrite this block, it's in use
+			auto blockRef = dirty.blockRef + i;
+			auto upstreamBlockRef = BlockRef(BlockRef.Type.upstream, blockIndex);
+
+			// Copy the block from its mapped location to the current position, thus flushing it.
+			auto block = readBlock(blockRef, blockBuf);
+			unhashBlock(upstreamBlockRef);
+			flushBlock(blockIndex, block);
+
+			unreferenceBlock(blockRef);
+			putBlockRef(blockIndex, upstreamBlockRef);
+			hashBlock(block, upstreamBlockRef);
+
+			blocksFlushed++;
+			if (!--blocksToFlush)
+				break;
+		}
+		pos = dirty.blockIndex + dirty.length;
+	}
+
+	stderr.writefln("Flushed %d blocks.", blocksFlushed);
+
+	if (blocksFlushed == 0 && blocksToFlush > 0)
+	{
+		stderr.writefln("Failed to flush anything. Copying at most %d blocks to COW store...", blocksToFlush);
+
+		pos = 0;
+		while (blocksToFlush > 0)
+		{
+			auto dirty = findDirty(pos);
+			if (dirty is DirtyExtent.notFound)
+				break;
+
+			foreach (i; 0 .. dirty.length)
+			{
+				auto blockIndex = dirty.blockIndex + i;
+				auto blockRef = dirty.blockRef + i;
+				if (blockRef.type != BlockRef.Type.upstream)
+					continue;
+
+				// Note: We are moving data from the target layer and not the upstream layer.
+				// This will unpin (free) the reference pointed at by `blockRef`.
+
+				auto block = readBlock(blockRef, blockBuf);
+				unhashBlock(blockRef);
+
+				// We use the hash table to deduplicate multiple
+				// references to the same upstream extent.
+
+				auto nextCow = getNextCow();
+				auto result = hashBlock(block, nextCow);
+				if (result == nextCow)
+					cowWrite(nextCow, block);
+				else
+				if (result.type == BlockRef.Type.cow)
+				{
+					referenceBlock(result);
+				}
+				else
+				{
+					// Hashed to somewhere else..?
+					unhashBlock(result);
+					hashBlock(block, nextCow);
+				}
+
+				putBlockRef(blockIndex, result);
+
+				blocksFlushed++;
+				if (!--blocksToFlush)
+					break;
+			}
+			pos = dirty.blockIndex + dirty.length;
+		}
+		stderr.writefln("Copied %d blocks.", blocksFlushed);
+	}
+}
+
+void flushBlock(BlockIndex index, in ubyte[] block)
+{
+	auto dev = &findDev(index);
+	auto offset = (index - dev.firstBlock) * blockSize;
+	ulong pos = 0;
+	do
+	{
+		auto bytesWritten = pwrite(dev.fd, block.ptr + pos, block.length - pos, offset + pos);
+		if (bytesWritten <= 0)
+			throw new ErrnoException(format("Error flushing %d bytes to upstream device %s at %d", block.length - pos, dev.name, offset + pos));
+		pos += bytesWritten;
+	} while (pos < blockSize && offset + pos < dev.size);
+}
+
+string flushError;
+
+void getFlushStatus(W)(ref W writer)
+if (isOutputRange!(W, char))
+{
+	if (readOnlyUpstream)
+		writer.put("disabled");
+	else
+	if (flushError)
+	{
+		writer.put("error\n");
+		writer.put(flushError);
+	}
+	else
+	if (findDirty(0) is DirtyExtent.notFound)
+		writer.put("clean");
+	else
+		writer.put("ready");
+}
+
+void handleFlushClose(char[] data) nothrow
+{
+	try
+	{
+		data = data.chomp();
+		switch (data)
+		{
+			case "full":
+				while (findDirty(0) !is DirtyExtent.notFound)
+					flush(BlockIndex.max);
+				break;
+			default:
+				flush(data.to!BlockIndex);
+		}
+	}
+	catch (Exception e)
+	{
+		flushError = e.msg;
+		stderr.writeln(e).assertNotThrown();
+	}
+}
+
+// *****************************************************************************
 // I/O operations
 
 /// Read a block from a device and a given address.
@@ -1095,8 +1337,12 @@ enum FuseHandle : uint64_t
 
 /// These are virtual files that are rendered at the time of opening,
 /// so that their contents remains consistent throughout the file handle's lifetime.
-string[uint64_t] files;
+char[][uint64_t] files;
 uint64_t nextFileIndex = FuseHandle.firstFile;
+
+/// What to do when a file opened for writing is closed.
+alias CloseHandler = void function(char[]) nothrow;
+CloseHandler[uint64_t] closeHandlers;
 
 void dumpToStderr(alias fun)(string prefix) nothrow
 {
@@ -1109,7 +1355,7 @@ void dumpToStderr(alias fun)(string prefix) nothrow
 
 void makeFile(alias fun)(fuse_file_info* fi) nothrow
 {
-	Appender!string appender;
+	Appender!(char[]) appender;
 	try
 		fun(appender);
 	catch (Exception e)
@@ -1118,6 +1364,12 @@ void makeFile(alias fun)(fuse_file_info* fi) nothrow
 	files[fd] = appender.data;
 	fi.fh = fd;
 	fi.direct_io = true;
+}
+
+void makeWritableFile(fuse_file_info* fi, CloseHandler handleClose) nothrow
+{
+	makeFile!((w) {})(fi);
+	closeHandlers[fi.fh] = handleClose;
 }
 
 extern(C) nothrow
@@ -1138,6 +1390,10 @@ extern(C) nothrow
 			case "/stats.txt":
 			case "/stats-full.txt":
 				s.st_mode = S_IFREG | S_IRUSR;
+				s.st_size = typeof(s.st_size).max;
+				break;
+			case "/flush":
+				s.st_mode = S_IFREG | S_IRUSR | S_IWUSR;
 				s.st_size = typeof(s.st_size).max;
 				break;
 			default:
@@ -1169,6 +1425,7 @@ extern(C) nothrow
 					"debug",
 					"stats.txt",
 					"stats-full.txt",
+					"flush",
 				];
 				foreach (d; rootDir)
 					filler(buf, cast(char*)d, null, 0);
@@ -1219,6 +1476,15 @@ extern(C) nothrow
 				if ((fi.flags & O_ACCMODE) != O_RDONLY) return -EINVAL;
 				makeFile!(dumpStats!true)(fi);
 				return 0;
+			case "/flush":
+				if ((fi.flags & O_ACCMODE) == O_RDONLY)
+					makeFile!getFlushStatus(fi);
+				else
+				if ((fi.flags & O_ACCMODE) == O_WRONLY)
+					makeWritableFile(fi, &handleFlushClose);
+				else
+					return -EINVAL;
+				return 0;
 			default:
 				if (path.startsWith("/devs/"))
 				{
@@ -1230,6 +1496,20 @@ extern(C) nothrow
 					return 0;
 				}
 				return -ENOENT;
+		}
+	}
+
+	int fs_truncate(const char* c_path, off_t offset)
+	{
+		auto path = c_path.fromStringz;
+		if (offset != 0)
+			return -EINVAL;
+		switch (path)
+		{
+			case "/flush":
+				return 0;
+			default:
+				return -EINVAL;
 		}
 	}
 
@@ -1255,7 +1535,14 @@ extern(C) nothrow
 	int fs_release(const char* c_path, fuse_file_info* fi)
 	{
 		if (fi.fh >= FuseHandle.firstFile)
+		{
+			if (auto phandler = fi.fh in closeHandlers)
+			{
+				(*phandler)(files[fi.fh]);
+				closeHandlers.remove(fi.fh);
+			}
 			files.remove(fi.fh);
+		}
 		return 0;
 	}
 
@@ -1318,15 +1605,28 @@ extern(C) nothrow
 	int fs_write(const char* /*path*/, char* data_ptr, size_t size,
                             off_t offset, fuse_file_info* fi)
 	{
+		if (size > int.max)
+			size = int.max;
+
+		auto data = (cast(ubyte*)data_ptr)[0 .. size];
+
 		if (fi.fh >= FuseHandle.firstFile)
-			return -EROFS;
+		{
+			if (fi.fh !in files)
+				return -EBADFD;
+			if (fi.fh !in closeHandlers)
+				return -EROFS;
+			if (offset != files[fi.fh].length)
+				return -EINVAL;
+			files[fi.fh] ~= cast(char[])data;
+			return cast(int)size;
+		}
 		if (fi.fh >= FuseHandle.firstDevice)
 		{
 			auto devIndex = fi.fh - FuseHandle.firstDevice;
 			if (devIndex >= devs.length) return -EBADFD;
 			auto dev = &devs[devIndex];
 
-			auto data = (cast(ubyte*)data_ptr)[0 .. size];
 			auto end = min(offset + size, dev.size);
 			if (offset >= end)
 				return 0;
@@ -1379,12 +1679,14 @@ void thincow(
 	Option!(string, "Directory containing upstream devices/symlinks.", "PATH") upstream,
 	Option!(string, "Directory where to store COW blocks.", "PATH") dataDir,
 	Option!(string, "Directory where to store metadata. If unspecified, defaults to the data directory.\nSpecify \"-\" to use RAM.", "PATH") metadataDir = null,
+	Option!(string, "Directory where to store large temporary data. If unspecified, defaults to \"-\" (RAM).", "PATH") tempDir = "-",
 	Option!(size_t, "Block size.\nLarger blocks means smaller metadata, but writes smaller than one block will cause a read-modify-write. The default is 512.", "BYTES") blockSize = 512,
 	Option!(size_t, "Hash table size.\nThe default is 1073741824 (1 GiB).", "BYTES") hashTableSize = 1024*1024*1024,
 	Option!(size_t, "Maximum size of the block map.", "BYTES") maxBlockMapSize = 1L << 63,
 	Option!(size_t, "Maximum number of blocks in the COW store.", "BLOCKS") maxCowBlocks = 1L << 63,
 	Switch!("Enable retroactive deduplication (more I/O intensive).") retroactive = false,
 	Switch!("Run in foreground.", 'f') foreground = false,
+	Switch!("Open upstream devices in read-only mode (flushing will be disabled).", 'r') readOnlyUpstream = false,
 	Option!(string[], "Additional FUSE options (e.g. debug).", "STR", 'o') options = null,
 )
 {
@@ -1395,13 +1697,14 @@ void thincow(
 
 	.blockSize = blockSize;
 	.retroactiveDeduplication = retroactive;
+	.readOnlyUpstream = readOnlyUpstream;
 
 	upstream.value.listDir!((de)
 	{
 		stderr.write(de.baseName, ": ");
 		enforce(!de.isDir, "Directories are not supported");
 		size_t deviceSize;
-		auto fd = openat(de.dirFD, de.ent.d_name.ptr, O_RDONLY);
+		auto fd = openat(de.dirFD, de.ent.d_name.ptr, readOnlyUpstream ? O_RDONLY : O_RDWR);
 		errnoEnforce(fd >= 0, "open failed: " ~ de.fullName);
 		if (de.isFile)
 			deviceSize = de.size;
@@ -1474,6 +1777,12 @@ void thincow(
 	uint bitsNeeded(ulong maxValue) { assert(maxValue); maxValue--; return maxValue ? 1 + bsr(maxValue) : 0; }
 	blockRefBits = bitsNeeded(maxCowBlocksLimit) + BlockRef.typeBits;
 
+	if (!readOnlyUpstream)
+	{
+		auto useMapBuf = mapFile(tempDir, "usemap", 1, (totalBlocks + 7) / 8);
+		useMap = BitArray(useMapBuf, totalBlocks);
+	}
+
 	if (!globals.btreeLength)
 	{
 		stderr.writeln("Initializing block map B-tree.");
@@ -1490,6 +1799,7 @@ void thincow(
 	fsops.readdir = &fs_readdir;
 	fsops.getattr = &fs_getattr;
 	fsops.open = &fs_open;
+	fsops.truncate = &fs_truncate;
 	fsops.opendir = &fs_opendir;
 	fsops.release = &fs_release;
 	fsops.read = &fs_read;

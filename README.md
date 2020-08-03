@@ -38,7 +38,9 @@ Usage
 4. You can now access and modify the data in the files under the specified mount-point.
    Modifications will be deduplicated and stored to `thincow`'s data files.
 
-5. When done, run `fusermount -u path/to/mount-point` to shut down `thincow` gracefully.
+5. To flush changes back to the upstream devices, you can run `echo full > path/to/mount-point/flush`.
+
+6. When done, run `fusermount -u path/to/mount-point` to shut down `thincow` gracefully.
 
 Notes:
 
