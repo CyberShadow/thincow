@@ -1012,6 +1012,10 @@ void flush(BlockIndex blocksToFlush)
 
 	if (blocksFlushed == 0 && blocksToFlush > 0)
 	{
+		// This can only happen in case of a data inter-dependency,
+		// e.g. want to write A->B and B->A.
+		// There is always at least one loop, each consisting of at least two blocks.
+		// To break the loop, copy some (or all) blocks from the loop to our COW store.
 		stderr.writefln("Failed to flush anything. Copying at most %d blocks to COW store...", blocksToFlush);
 
 		pos = 0;
@@ -1026,7 +1030,12 @@ void flush(BlockIndex blocksToFlush)
 				auto blockIndex = dirty.blockIndex + i;
 				auto blockRef = dirty.blockRef + i;
 				if (blockRef.type != BlockRef.Type.upstream)
-					continue;
+				{
+					// Can't have COW references here,
+					// because if there were COW references,
+					// it would imply that the dependency chain is finite (i.e. not a loop).
+					assert(false);
+				}
 
 				// Note: We are moving data from the target layer and not the upstream layer.
 				// This will unpin (free) the reference pointed at by `blockRef`.
@@ -1034,23 +1043,23 @@ void flush(BlockIndex blocksToFlush)
 				auto block = readBlock(blockRef, blockBuf);
 				unhashBlock(blockRef);
 
-				// We use the hash table to deduplicate multiple
-				// references to the same upstream extent.
-
 				auto nextCow = getNextCow();
 				auto result = hashBlock(block, nextCow);
 				if (result == nextCow)
-					cowWrite(nextCow, block);
+					cowWrite(result, block);
 				else
 				if (result.type == BlockRef.Type.cow)
 				{
+					// Saved to COW, then discovered on upstream.
+					// Reuse the old COW location.
 					referenceBlock(result);
 				}
 				else
 				{
 					// Hashed to somewhere else..?
 					unhashBlock(result);
-					hashBlock(block, nextCow);
+					result = hashBlock(block, nextCow);
+					cowWrite(result, block);
 				}
 
 				putBlockRef(blockIndex, result);
