@@ -1189,15 +1189,6 @@ extern(C) nothrow
 		auto path = c_path.fromStringz;
 		switch (path)
 		{
-			case "/":
-				fi.fh = FuseHandle.rootDir;
-				return 0;
-			case "/devs":
-				fi.fh = FuseHandle.devsDir;
-				return 0;
-			case "/debug":
-				fi.fh = FuseHandle.debugDir;
-				return 0;
 			case "/debug/btree.txt":
 				makeFile!dumpBtree(fi);
 				return 0;
@@ -1223,6 +1214,25 @@ extern(C) nothrow
 					fi.fh = FuseHandle.firstDevice + devIndex;
 					return 0;
 				}
+				return -ENOENT;
+		}
+	}
+
+	int fs_opendir(const char* c_path, fuse_file_info* fi)
+	{
+		auto path = c_path.fromStringz;
+		switch (path)
+		{
+			case "/":
+				fi.fh = FuseHandle.rootDir;
+				return 0;
+			case "/devs":
+				fi.fh = FuseHandle.devsDir;
+				return 0;
+			case "/debug":
+				fi.fh = FuseHandle.debugDir;
+				return 0;
+			default:
 				return -ENOENT;
 		}
 	}
@@ -1465,7 +1475,7 @@ void thincow(
 	fsops.readdir = &fs_readdir;
 	fsops.getattr = &fs_getattr;
 	fsops.open = &fs_open;
-	fsops.opendir = &fs_open;
+	fsops.opendir = &fs_opendir;
 	fsops.release = &fs_release;
 	fsops.read = &fs_read;
 	fsops.write = &fs_write;
