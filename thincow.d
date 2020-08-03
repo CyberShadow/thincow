@@ -863,7 +863,7 @@ const(ubyte)[] readBlock(BlockRef br, ref ubyte[] blockBuf)
 			ulong pos = 0;
 			do
 			{
-				auto bytesRead = pread(dev.fd, blockBuf.ptr + pos, blockSize - pos, offset);
+				auto bytesRead = pread(dev.fd, blockBuf.ptr + pos, blockSize - pos, offset + pos);
 				if (bytesRead < 0)
 				{
 					dev.errors++;
