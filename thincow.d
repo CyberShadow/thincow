@@ -1119,6 +1119,9 @@ void handleFlushClose(char[] data) nothrow
 				while (findDirty(0) !is DirtyExtent.notFound)
 					flush(BlockIndex.max);
 				break;
+			case "max":
+				flush(BlockIndex.max);
+				break;
 			default:
 				flush(data.to!BlockIndex);
 		}
