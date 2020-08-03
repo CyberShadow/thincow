@@ -9,6 +9,15 @@ Use cases include:
 - Trying dangerous operations on filesystems, such as invasive repair or conversion
 - Reshaping storage volumes or filesystems in order to prepare to move them (block-wise) to new media
 
+Features
+--------
+
+- Thinly provisioned Copy-on-Write store
+- Inline block-based deduplication
+- Extent (B-tree) based data representation
+- Fault tolerant (errors from upstream devices are propagated to FUSE client)
+- Optional incremental flushing
+
 Building
 --------
 
