@@ -821,6 +821,52 @@ COWIndex[] cowMap;
 /// The raw storage for COW data (data which does not exist on upstream devices)
 ubyte[] cowData;
 
+/// Where the next block will go should it be added to the COW store.
+BlockRef getNextCow() nothrow
+{
+	BlockRef result;
+	final switch (cowMap[0].type)
+	{
+		case COWIndex.Type.lastBlock:
+			result.cow = 1 + cowMap[0].lastBlock;
+			break;
+		case COWIndex.Type.nextFree:
+			result.cow = cowMap[0].nextFree;
+			break;
+		case COWIndex.Type.refCount:
+			assert(false);
+	}
+	assert(result.cow > 0);
+	assert(cowMap[result.cow].free);
+	return result;
+}
+
+/// Write a new block to a free cell in the COW store.
+/// `br` should be a fresh return value of `getNextCow`
+void cowWrite(BlockRef br, const(ubyte)[] block) nothrow
+{
+	assert(br.type == BlockRef.Type.cow);
+	assert(cowMap[br.cow].free);
+
+	auto offset = br.cow * blockSize;
+	cowData[offset .. offset + block.length] = block;
+	debug(cow) stderr.writefln(">> new: block %s [%(%02X %)]", br, block[0 .. 8]).assertNotThrown;
+	final switch (cowMap[0].type)
+	{
+		case COWIndex.Type.lastBlock:
+			assert(br.cow == cowMap[0].lastBlock + 1);
+			cowMap[0].lastBlock = br.cow;
+			break;
+		case COWIndex.Type.nextFree:
+			cowMap[0] = cowMap[br.cow];
+			break;
+		case COWIndex.Type.refCount:
+			assert(false);
+	}
+	cowMap[br.cow].refCount = 1;
+	debug(cow) dumpToStderr!dumpCOW(">>> after writeBlock: ");
+}
+
 void dumpCOW(W)(ref W writer)
 if (isOutputRange!(W, char))
 {
@@ -910,26 +956,6 @@ const(ubyte)[] tryReadBlock(BlockRef br, ref ubyte[] blockBuf) nothrow
 	}
 }
 
-/// Where the next block will go should it be added to the COW store.
-BlockRef getNextCow() nothrow
-{
-	BlockRef result;
-	final switch (cowMap[0].type)
-	{
-		case COWIndex.Type.lastBlock:
-			result.cow = 1 + cowMap[0].lastBlock;
-			break;
-		case COWIndex.Type.nextFree:
-			result.cow = cowMap[0].nextFree;
-			break;
-		case COWIndex.Type.refCount:
-			assert(false);
-	}
-	assert(result.cow > 0);
-	assert(cowMap[result.cow].free);
-	return result;
-}
-
 /// Write a block to a device and a given address.
 void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 {
@@ -957,23 +983,7 @@ void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 	if (result == nextCow)
 	{
 		// New block - add to COW store
-		auto offset = result.cow * blockSize;
-		cowData[offset .. offset + block.length] = block;
-		debug(cow) stderr.writefln(">> new: block %s [%(%02X %)]", result, block[0 .. 8]).assertNotThrown;
-		final switch (cowMap[0].type)
-		{
-			case COWIndex.Type.lastBlock:
-				assert(result.cow == cowMap[0].lastBlock + 1);
-				cowMap[0].lastBlock = result.cow;
-				break;
-			case COWIndex.Type.nextFree:
-				cowMap[0] = cowMap[result.cow];
-				break;
-			case COWIndex.Type.refCount:
-				assert(false);
-		}
-		cowMap[result.cow].refCount = 1;
-		debug(cow) dumpToStderr!dumpCOW(">>> after writeBlock: ");
+		cowWrite(result, block);
 	}
 	else
 	{
