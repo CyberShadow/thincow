@@ -1190,18 +1190,23 @@ extern(C) nothrow
 		switch (path)
 		{
 			case "/debug/btree.txt":
+				if ((fi.flags & O_ACCMODE) != O_RDONLY) return -EINVAL;
 				makeFile!dumpBtree(fi);
 				return 0;
 			case "/debug/cow.txt":
+				if ((fi.flags & O_ACCMODE) != O_RDONLY) return -EINVAL;
 				makeFile!dumpCOW(fi);
 				return 0;
 			case "/debug/hash-table.txt":
+				if ((fi.flags & O_ACCMODE) != O_RDONLY) return -EINVAL;
 				makeFile!dumpHashTable(fi);
 				return 0;
 			case "/stats.txt":
+				if ((fi.flags & O_ACCMODE) != O_RDONLY) return -EINVAL;
 				makeFile!(dumpStats!false)(fi);
 				return 0;
 			case "/stats-full.txt":
+				if ((fi.flags & O_ACCMODE) != O_RDONLY) return -EINVAL;
 				makeFile!(dumpStats!true)(fi);
 				return 0;
 			default:
