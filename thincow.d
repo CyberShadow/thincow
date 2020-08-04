@@ -127,8 +127,19 @@ template dumpStats(bool full)
 		writer.formattedWrite!"Block size: %d\n"(blockSize);
 		writer.formattedWrite!"Total blocks: %d (%d bytes)\n"(totalBlocks, totalBlocks * blockSize);
 		writer.formattedWrite!"Devices:\n"();
-		foreach (i, ref dev; devs)
-			writer.formattedWrite!"\tDevice #%d: %(%s%), %d bytes, first block: %d, %d read errors\n"(i, dev.name.only, dev.size, dev.firstBlock, dev.errors);
+		foreach (i, ref Dev dev; devs)
+		{
+			writer.formattedWrite!"\tDevice #%d:\n"(i);
+			writer.formattedWrite!"\t\tName: %(%s%)\n"(dev.name.only);
+			writer.formattedWrite!"\t\tSize: %d bytes\n"(dev.size);
+			writer.formattedWrite!"\t\tFirst block: %d\n"(dev.firstBlock);
+			writer.formattedWrite!"\t\tUpstream reads: %d blocks\n"(dev.reads);
+			writer.formattedWrite!"\t\tUpstream read errors: %d\n"(dev.readErrors);
+			writer.formattedWrite!"\t\tUpstream writes (flushes): %d blocks\n"(dev.writes);
+			writer.formattedWrite!"\t\tUpstream write errors: %d\n"(dev.writeErrors);
+			writer.formattedWrite!"\t\tFUSE read requests: %d blocks\n"(dev.readRequests);
+			writer.formattedWrite!"\t\tFUSE write requests: %d blocks\n"(dev.writeRequests);
+		}
 		writer.formattedWrite!"B-tree nodes: %d (%d bytes)\n"(globals.btreeLength, globals.btreeLength * BTreeNode.sizeof);
 		auto btreeDepth = (&blockMap[globals.btreeRoot])
 			.recurrence!((state, i) => state[0] && !state[0].isLeaf ? &blockMap[state[0].elems[0].childIndex] : null)
@@ -277,8 +288,8 @@ struct Dev
 	BlockIndex firstBlock;
 	/// File name of the device (in the upstream directory, and in the FUSE filesystem)
 	string name;
-	/// Read errors
-	ulong errors;
+	/// Stats
+	ulong reads, readErrors, writes, writeErrors, readRequests, writeRequests;
 }
 Dev[] devs;
 
@@ -1083,9 +1094,13 @@ void flushBlock(BlockIndex index, in ubyte[] block)
 	{
 		auto bytesWritten = pwrite(dev.fd, block.ptr + pos, block.length - pos, offset + pos);
 		if (bytesWritten <= 0)
+		{
+			dev.writeErrors++;
 			throw new ErrnoException(format("Error flushing %d bytes to upstream device %s at %d", block.length - pos, dev.name, offset + pos));
+		}
 		pos += bytesWritten;
 	} while (pos < blockSize && offset + pos < dev.size);
+	dev.writes++;
 }
 
 string flushError;
@@ -1139,6 +1154,7 @@ void handleFlushClose(char[] data) nothrow
 /// Read a block from a device and a given address.
 const(ubyte)[] readBlock(Dev* dev, size_t devBlockIndex, ref ubyte[] blockBuf)
 {
+	dev.readRequests++;
 	BlockIndex blockIndex = dev.firstBlock + devBlockIndex;
 	auto br = getBlockRef(blockIndex);
 	auto block = readBlock(br, blockBuf);
@@ -1166,7 +1182,7 @@ const(ubyte)[] readBlock(BlockRef br, ref ubyte[] blockBuf)
 				auto bytesRead = pread(dev.fd, blockBuf.ptr + pos, blockSize - pos, offset + pos);
 				if (bytesRead < 0)
 				{
-					dev.errors++;
+					dev.readErrors++;
 					throw new ErrnoException(null);
 				}
 				if (bytesRead == 0)
@@ -1176,6 +1192,7 @@ const(ubyte)[] readBlock(BlockRef br, ref ubyte[] blockBuf)
 				}
 				pos += bytesRead;
 			} while (pos < blockSize);
+			dev.reads++;
 			return blockBuf;
 		}
 		case BlockRef.Type.cow:
@@ -1213,6 +1230,7 @@ const(ubyte)[] tryReadBlock(BlockRef br, ref ubyte[] blockBuf) nothrow
 /// Write a block to a device and a given address.
 void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 {
+	dev.writeRequests++;
 	BlockIndex blockIndex = dev.firstBlock + devBlockIndex;
 	unreferenceBlock(getBlockRef(blockIndex));
 
