@@ -43,6 +43,7 @@ import ae.sys.file;
 import ae.utils.funopt;
 import ae.utils.main;
 import ae.utils.math : roundUpToPowerOfTwo;
+import ae.utils.meta;
 
 __gshared: // disable TLS
 
@@ -126,30 +127,22 @@ template dumpStats(bool full)
 	{
 		writer.formattedWrite!"Block size: %d\n"(blockSize);
 		writer.formattedWrite!"Total blocks: %d (%d bytes)\n"(totalBlocks, totalBlocks * blockSize);
-		writer.formattedWrite!"Devices:\n"();
-		foreach (i, ref Dev dev; devs)
-		{
-			writer.formattedWrite!"\tDevice #%d:\n"(i);
-			writer.formattedWrite!"\t\tName: %(%s%)\n"(dev.name.only);
-			writer.formattedWrite!"\t\tSize: %d bytes\n"(dev.size);
-			writer.formattedWrite!"\t\tFirst block: %d\n"(dev.firstBlock);
-			writer.formattedWrite!"\t\tUpstream reads: %d blocks\n"(dev.reads);
-			writer.formattedWrite!"\t\tUpstream read errors: %d\n"(dev.readErrors);
-			writer.formattedWrite!"\t\tUpstream writes (flushes): %d blocks\n"(dev.writes);
-			writer.formattedWrite!"\t\tUpstream write errors: %d\n"(dev.writeErrors);
-			writer.formattedWrite!"\t\tFUSE read requests: %d blocks\n"(dev.readRequests);
-			writer.formattedWrite!"\t\tFUSE write requests: %d blocks\n"(dev.writeRequests);
-		}
-		writer.formattedWrite!"B-tree nodes: %d (%d bytes)\n"(globals.btreeLength, globals.btreeLength * BTreeNode.sizeof);
 		auto btreeDepth = (&blockMap[globals.btreeRoot])
 			.recurrence!((state, i) => state[0] && !state[0].isLeaf ? &blockMap[state[0].elems[0].childIndex] : null)
 			.countUntil(null);
-		writer.formattedWrite!"B-tree depth: %d\n"(btreeDepth);
-		writer.formattedWrite!"Current B-tree root: %d\n"(globals.btreeRoot);
 		static if (full)
 		{
+			// Scan intent #1: collect per-device contents
+			enum Contents { original, remapped, cow }
+			static immutable contentsStr = ["Original", "Remapped", "COW"];
+			alias DevContents = BlockIndex[enumLength!Contents];
+			auto devContents = new DevContents[devs.length];
+			size_t currentDevIndex;
+
+			// Scan intent #2: collect total remapped block count (for disk space saving stats)
 			size_t spaceSavedUpstream;
 
+			// Scan intent #3: collect data for B-tree fullness plot
 			// Plot: y -> depth, x -> fullness, plot[x,y] -> count with this fullness
 			enum btreeFullnessCountBuckets = min(btreeNodeLength, 16);
 			auto btreeFullness = new size_t[btreeFullnessCountBuckets][btreeDepth];
@@ -166,8 +159,40 @@ template dumpStats(bool full)
 					auto elemEnd = elemIndex < node.count ? node.elems[elemIndex + 1].firstBlockIndex : end;
 					if (node.isLeaf)
 					{
-						if (elem.firstBlockRef.type == BlockRef.Type.upstream && elem.firstBlockRef.upstream != elemStart)
-							spaceSavedUpstream += elemEnd - elemStart;
+						auto elemLen = elemEnd - elemStart;
+						Contents contents;
+						if (elem.firstBlockRef.type == BlockRef.Type.upstream)
+							if (elem.firstBlockRef.upstream == elemStart)
+								contents = Contents.original;
+							else
+							{
+								contents = Contents.remapped;
+								spaceSavedUpstream += elemLen;
+							}
+						else
+						if (elem.firstBlockRef.type == BlockRef.Type.cow)
+							contents = Contents.cow;
+						else
+							assert(false);
+
+						{
+							auto remStart = elemStart;
+							while (remStart < elemEnd)
+							{
+								assert(remStart >= devs[currentDevIndex].firstBlock);
+								auto devEnd = currentDevIndex + 1 == devs.length ? totalBlocks : devs[currentDevIndex + 1].firstBlock;
+								assert(remStart < devEnd);
+								auto segStart = remStart;
+								auto segEnd = min(elemEnd, devEnd);
+								assert(segStart < segEnd);
+								auto segLen = segEnd - segStart;
+								devContents[currentDevIndex][contents] += segLen;
+								remStart = segEnd;
+								assert(remStart <= devEnd);
+								if (remStart == devEnd)
+									currentDevIndex++;
+							}
+						}
 					}
 					else
 						scan(blockMap[elem.childIndex], elemStart, elemEnd, depth + 1);
@@ -175,6 +200,31 @@ template dumpStats(bool full)
 			}
 			scan(blockMap[globals.btreeRoot], 0, totalBlocks, 0);
 		}
+		writer.formattedWrite!"Devices:\n"();
+		foreach (i, ref Dev dev; devs)
+		{
+			auto devEnd = i + 1 == devs.length ? totalBlocks : devs[i + 1].firstBlock;
+			auto devBlocks = devEnd - dev.firstBlock;
+			writer.formattedWrite!"\tDevice #%d:\n"(i);
+			writer.formattedWrite!"\t\tName: %(%s%)\n"(dev.name.only);
+			writer.formattedWrite!"\t\tSize: %d bytes (%d blocks)\n"(dev.size, devBlocks);
+			writer.formattedWrite!"\t\tFirst block: %d\n"(dev.firstBlock);
+			writer.formattedWrite!"\t\tUpstream reads: %d blocks\n"(dev.reads);
+			writer.formattedWrite!"\t\tUpstream read errors: %d\n"(dev.readErrors);
+			writer.formattedWrite!"\t\tUpstream writes (flushes): %d blocks\n"(dev.writes);
+			writer.formattedWrite!"\t\tUpstream write errors: %d\n"(dev.writeErrors);
+			writer.formattedWrite!"\t\tFUSE read requests: %d blocks\n"(dev.readRequests);
+			writer.formattedWrite!"\t\tFUSE write requests: %d blocks\n"(dev.writeRequests);
+			static if (full)
+			{
+				writer.formattedWrite!"\t\tContents:\n"();
+				foreach (c, blocks; devContents[i])
+					writer.formattedWrite!"\t\t\t%s: %d blocks (%.0f%%)\n"(contentsStr[c], blocks, blocks * 100.0 / devBlocks);
+			}
+		}
+		writer.formattedWrite!"B-tree nodes: %d (%d bytes)\n"(globals.btreeLength, globals.btreeLength * BTreeNode.sizeof);
+		writer.formattedWrite!"B-tree depth: %d\n"(btreeDepth);
+		writer.formattedWrite!"Current B-tree root: %d\n"(globals.btreeRoot);
 		static if (full)
 		{{
 			auto btreeTotal = globals.btreeLength * btreeNodeLength;
