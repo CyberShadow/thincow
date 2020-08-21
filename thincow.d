@@ -663,6 +663,8 @@ void putBlockRef(BlockIndex blockIndex, BlockRef blockRef) nothrow @nogc
 	{
 		assert(!parent.isLeaf);
 		assert(parent.count + 1 < btreeNodeLength);
+		if (globals.btreeLength >= blockMap.length)
+			assert(false, "B-tree full");
 		auto leftIndex = parent.elems[childElemIndex].childIndex;
 		auto leftNode = &blockMap[leftIndex];
 		auto rightIndex = globals.btreeLength++;
@@ -838,6 +840,8 @@ void putBlockRef(BlockIndex blockIndex, BlockRef blockRef) nothrow @nogc
 	while (!descend(blockMap[globals.btreeRoot], 0, totalBlocks))
 	{
 		// First, allocate new root
+		if (globals.btreeLength >= blockMap.length)
+			assert(false, "B-tree full");
 		auto newRootIndex = globals.btreeLength++;
 		auto newRoot = &blockMap[newRootIndex];
 		assert(newRoot.count == 0);
@@ -893,6 +897,8 @@ BlockRef getNextCow() nothrow
 	{
 		case COWIndex.Type.lastBlock:
 			result.cow = 1 + cowMap[0].lastBlock;
+			if (result.cow >= cowMap.length)
+				assert(false, "COW storage full");
 			break;
 		case COWIndex.Type.nextFree:
 			result.cow = cowMap[0].nextFree;
