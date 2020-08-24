@@ -1760,7 +1760,7 @@ extern(C) nothrow
 // Entry point
 
 @(`Create a deduplicated, COW view of block devices as a FUSE filesystem.`)
-void thincow(
+int thincow(
 	Parameter!(string, "Where to mount the FUSE filesystem.") target,
 	Option!(string, "Directory containing upstream devices/symlinks.", "PATH") upstream,
 	Option!(string, "Directory where to store COW blocks.", "PATH") dataDir,
@@ -1905,8 +1905,8 @@ void thincow(
 	auto f_args = FUSE_ARGS_INIT(cast(int)c_args.length, c_args.ptr);
 
 	stderr.writeln("Starting FUSE filesystem.");
-	fuse_main(f_args.argc, f_args.argv, &fsops, null);
-	stderr.writeln("thincow exiting.");
+	scope(success) stderr.writeln("thincow exiting.");
+	return fuse_main(f_args.argc, f_args.argv, &fsops, null);
 }
 
 mixin main!(funopt!thincow);
