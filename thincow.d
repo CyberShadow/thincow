@@ -1904,6 +1904,7 @@ void thincow(
 		c_args[i] = cast(char*)arg.toStringz;
 	auto f_args = FUSE_ARGS_INIT(cast(int)c_args.length, c_args.ptr);
 
+	stderr.writeln("Starting FUSE filesystem.");
 	fuse_main(f_args.argc, f_args.argv, &fsops, null);
 	stderr.writeln("thincow exiting.");
 }
