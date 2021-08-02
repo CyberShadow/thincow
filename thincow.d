@@ -1410,27 +1410,35 @@ void unreferenceBlock(BlockRef br) nothrow
 // *****************************************************************************
 // fsck
 
-void fsck()
+bool fsck()
 {
 	ulong[] cowRefCount;
 	auto btreeVisited = new bool[globals.btreeLength];
+	size_t numErrors;
+
+	void logError(string s)
+	{
+		stderr.writeln("- ERROR: ", s);
+		numErrors++;
+	}
 
 	{
 		stderr.writeln("Scanning B-tree...");
 
 		void scan(size_t nodeIndex, BlockIndex nodeStart, BlockIndex nodeEnd)
 		{
-			enforce(nodeIndex < globals.btreeLength,
-				format!"Out-of-bounds B-tree child node index: %d/%d"(
+			if (nodeIndex >= globals.btreeLength)
+				logError(format!"Out-of-bounds B-tree child node index: %d/%d"(
 					nodeIndex, globals.btreeLength,
-					)
-			);
-			enforce(!btreeVisited[nodeIndex],
-				format!"Multiple references to B-tree child node %d/%d"(
-					nodeIndex, globals.btreeLength,
-				)
-			);
-			btreeVisited[nodeIndex] = true;
+				));
+			else
+			{
+				if (btreeVisited[nodeIndex])
+					logError(format!"Multiple references to B-tree child node %d/%d"(
+						nodeIndex, globals.btreeLength,
+					));
+				btreeVisited[nodeIndex] = true;
+			}
 
 			auto node = &blockMap[nodeIndex];
 			if (!node.isLeaf)
@@ -1441,28 +1449,26 @@ void fsck()
 			{
 				auto elemStart = elemIndex ? elem.firstBlockIndex : nodeStart;
 				auto elemEnd = elemIndex < node.count ? node.elems[elemIndex + 1].firstBlockIndex : nodeEnd;
-				enforce(elemStart <= elemEnd,
-					format!"Invalid range %d-%d for element %d in B-tree leaf node %d"(
+				if (elemStart > elemEnd)
+					logError(format!"Invalid range %d-%d for element %d in B-tree leaf node %d"(
 						elemStart, elemEnd,
 						elemIndex,
 						nodeIndex,
-					)
-				);
-				enforce(elemStart < elemEnd,
-					format!"Empty range %d-%d for element %d in B-tree leaf node %d"(
+					));
+				else
+				if (elemStart == elemEnd)
+					logError(format!"Empty range %d-%d for element %d in B-tree leaf node %d"(
 						elemStart, elemEnd,
 						elemIndex,
 						nodeIndex,
-					)
-				);
-				enforce(pos <= elemStart,
-					format!"Descending range %d-%d (after %d) for element %d in B-tree leaf node %d"(
+					));
+				if (pos > elemStart)
+					logError(format!"Descending range %d-%d (after %d) for element %d in B-tree leaf node %d"(
 						elemStart, elemEnd,
 						pos,
 						elemIndex,
 						nodeIndex,
-					)
-				);
+					));
 				pos = elemEnd;
 
 				if (node.isLeaf)
@@ -1475,15 +1481,14 @@ void fsck()
 							auto useStart = elem.firstBlockRef.upstream;
 							auto useEnd = useStart + elemLen;
 							foreach (i, use; [useStart, useEnd].staticArray)
-								enforce(use <= totalBlocks,
-									format!"%s of element %d in B-tree leaf node %d references out-of-bounds upstream block %d (out of %d)"(
+								if (use > totalBlocks)
+									logError(format!"%s of element %d in B-tree leaf node %d references out-of-bounds upstream block %d (out of %d)"(
 										i ? "End" : "Start",
 										elemIndex,
 										nodeIndex,
 										use,
 										totalBlocks,
-									)
-								);
+									));
 							break;
 						}
 						case BlockRef.Type.cow:
@@ -1493,15 +1498,14 @@ void fsck()
 							auto useEnd = useStart + elemLen;
 							foreach (use; useStart .. useEnd)
 							{
-								enforce(use < cowMap.length,
-									format!"Block %d in range of element %d in B-tree leaf node %d references out-of-bounds COW block %d (out of %d)"(
+								if (use >= cowMap.length)
+									logError(format!"Block %d in range of element %d in B-tree leaf node %d references out-of-bounds COW block %d (out of %d)"(
 										use - useStart,
 										elemIndex,
 										nodeIndex,
 										use,
 										cowMap.length,
-									)
-								);
+									));
 								if (cowRefCount.length < use + 1)
 									cowRefCount.length = use + 1;
 								cowRefCount[use]++;
@@ -1509,13 +1513,11 @@ void fsck()
 							break;
 						}
 						default:
-							enforce(false,
-								format!"Element %d in B-tree leaf node %d has unknown type %s"(
-									elemIndex,
-									nodeIndex,
-									elem.firstBlockRef.type,
-								)
-							);
+							logError(format!"Element %d in B-tree leaf node %d has unknown type %s"(
+								elemIndex,
+								nodeIndex,
+								elem.firstBlockRef.type,
+							));
 					}
 				}
 				else
@@ -1529,11 +1531,10 @@ void fsck()
 		stderr.writeln("Checking B-tree usage...");
 
 		foreach (nodeIndex, visited; btreeVisited)
-			enforce(visited,
-				format!"Unreferenced (lost) B-tree node: %d/%d"(
+			if (!visited)
+				logError(format!"Unreferenced (lost) B-tree node: %d/%d"(
 					nodeIndex, globals.btreeLength,
-				)
-			);
+				));
 	}
 
 	ulong usedCowBlocks;
@@ -1549,18 +1550,19 @@ void fsck()
 
 			if (cowRefCount.length < i + 1)
 				cowRefCount.length = i + 1;
-			enforce(cowRefCount[i] != ulong.max,
-				format!"Item %d occurs several times in the COW free list"(
+			if (cowRefCount[i] == ulong.max)
+				logError(format!"Item %d occurs several times in the COW free list"(
 					i,
-				)
-			);
-			enforce(cowRefCount[i] == 0,
-				format!"Item %d is in the COW free list, but occurs in the B-tree %d times"(
-					i,
-					cowRefCount[i],
-				)
-			);
-			cowRefCount[i] = ulong.max;
+				));
+			else
+			{
+				if (cowRefCount[i] != 0)
+					logError(format!"Item %d is in the COW free list, but occurs in the B-tree %d times"(
+						i,
+						cowRefCount[i],
+					));
+				cowRefCount[i] = ulong.max;
+			}
 
 			switch (cowMap[i].type)
 			{
@@ -1571,17 +1573,19 @@ void fsck()
 					i = cowMap[i].nextFree;
 					break;
 				default:
-					enforce(false,
-						format!"Item %d in COW free list has unexpected type %s"(
-							i,
-							cowMap[i].type,
-						)
-					);
+					logError(format!"Item %d in COW free list has unexpected type %s"(
+						i,
+						cowMap[i].type,
+					));
 			}
 		}
 
 		assert(cowLastBlock != ulong.max); // unreachable otherwise
-		enforce(cowLastBlock < cowMap.length, "Out-of-bounds last COW block");
+		if (cowLastBlock >= cowMap.length)
+			logError(format!"Out-of-bounds last COW block: %d/%d"(
+				cowLastBlock,
+				cowMap.length,
+			));
 		usedCowBlocks = cowLastBlock + 1;
 	}
 
@@ -1590,59 +1594,62 @@ void fsck()
 
 		foreach (i; 0 .. usedCowBlocks)
 		{
-			enforce(cowRefCount[i] != 0,
-				format!"COW block %d/%d (in map as %s) occurs neither in the free list nor B-tree"(
+			if (cowRefCount[i] == 0)
+				logError(format!"COW block %d/%d (in map as %s) occurs neither in the free list nor B-tree"(
 					i, usedCowBlocks,
 					cowMap[i],
-				)
-			);
-
+				));
+			else
 			if (cowRefCount[i] == ulong.max)
 				assert(cowMap[i].free, // not possible
 					format!"COW block %d/%d (in map as %s) is in the free list but is not free"(
 						i, usedCowBlocks,
 						cowMap[i],
-					)
-				);
+					));
 
 			if (cowRefCount[i] != ulong.max)
 			{
-				enforce(!cowMap[i].free,
-					format!"COW block %d/%d (in map as %s) occurs in the B-tree %d times but is marked as free"(
+				if (cowMap[i].free)
+					logError(format!"COW block %d/%d (in map as %s) occurs in the B-tree %d times but is marked as free"(
 						i, usedCowBlocks,
 						cowMap[i],
 						cowRefCount[i],
-					)
-				);
-				enforce(cowMap[i].refCount == cowRefCount[i],
-					format!"COW block %d/%d is in map as %s but occurs in the B-tree %d times"(
+					));
+				if (cowMap[i].refCount != cowRefCount[i])
+					logError(format!"COW block %d/%d is in map as %s but occurs in the B-tree %d times"(
 						i, usedCowBlocks,
 						cowMap[i],
 						cowRefCount[i],
-					)
-				);
+					));
 			}
 		}
 
 		foreach (i; usedCowBlocks .. cowMap.length)
 		{
-			enforce(i >= cowRefCount.length || cowRefCount[i] == 0,
-				format!"Reserved COW block %d/%d (in map as %s) actually occurs in the B-tree %d times"(
+			if (i < cowRefCount.length && cowRefCount[i] != 0)
+				logError(format!"Reserved COW block %d/%d (in map as %s) actually occurs in the B-tree %d times"(
 					i, usedCowBlocks,
 					cowMap[i],
 					cowRefCount[i],
-				)
-			);
-			enforce(cowMap[i] is COWIndex.init,
-				format!"Reserved COW block %d/%d (in map as %s) is non-null"(
+				));
+			if (cowMap[i] !is COWIndex.init)
+				logError(format!"Reserved COW block %d/%d (in map as %s) is non-null"(
 					i, usedCowBlocks,
 					cowMap[i],
-				)
-			);
+				));
 		}
 	}
 
-	stderr.writeln("Found no errors.");
+	if (!numErrors)
+	{
+		stderr.writeln("Found no errors.");
+		return true;
+	}
+	else
+	{
+		stderr.writefln("Found %d errors!", numErrors);
+		return false;
+	}
 }
 
 // *****************************************************************************
@@ -2122,7 +2129,8 @@ int thincow(
 	debug(btree) dumpToStderr!dumpBtree("");
 
 	if (fsck)
-		.fsck();
+		if (!.fsck())
+			return 1;
 
 	if (noMount)
 		return 0;
