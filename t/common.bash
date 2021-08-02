@@ -100,6 +100,7 @@ function run_thincow() {
 		--data-dir=data
 		--block-size="$block_size"
 		--hash-table-size="$hash_table_size"
+		--fsck
 		target
 		"$@"
 	)
