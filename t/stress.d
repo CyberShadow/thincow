@@ -127,6 +127,8 @@ void testSeed(Seed seed)
 	if (foreground) enforce(pid.wait() == 0, "thincow failed on exit");
 	while (pipe.readEnd.readln()) {}
 
+	enforce(spawnProcess(args ~ ["--fsck", "--no-mount", "--foreground", "-o=debug"]).wait() == 0, "fsck failed");
+
 	foreach (dir; ["upstream", "target", "control"])
 		dir.rmdirRecurse();
 }
