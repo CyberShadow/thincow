@@ -1774,6 +1774,7 @@ int thincow(
 	Switch!("Run in foreground.", 'f') foreground = false,
 	Switch!("Open upstream devices in read-only mode (flushing will be disabled).", 'r') readOnlyUpstream = false,
 	Option!(string[], "Additional FUSE options (e.g. debug).", "STR", 'o') options = null,
+	Switch!("Don't actually mount the filesystem, and exit after initialization/fsck.") noMount = false,
 )
 {
 	enforce(upstream, "No upstream device directory specified");
@@ -1880,6 +1881,9 @@ int thincow(
 		root.elems[0].firstBlockRef = br;
 	}
 	debug(btree) dumpToStderr!dumpBtree("");
+
+	if (noMount)
+		return 0;
 
 	fuse_operations fsops;
 	fsops.readdir = &fs_readdir;
