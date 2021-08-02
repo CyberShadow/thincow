@@ -1413,12 +1413,26 @@ void unreferenceBlock(BlockRef br) nothrow
 void fsck()
 {
 	ulong[] cowRefCount;
+	auto btreeVisited = new bool[globals.btreeLength];
 
 	{
 		stderr.writeln("Scanning B-tree...");
 
-		void scan(ref BTreeNode node, BlockIndex nodeStart, BlockIndex nodeEnd)
+		void scan(size_t nodeIndex, BlockIndex nodeStart, BlockIndex nodeEnd)
 		{
+			enforce(nodeIndex < globals.btreeLength,
+				format!"Out-of-bounds B-tree child node index: %d/%d"(
+					nodeIndex, globals.btreeLength,
+					)
+			);
+			enforce(!btreeVisited[nodeIndex],
+				format!"Multiple references to B-tree child node %d/%d"(
+					nodeIndex, globals.btreeLength,
+				)
+			);
+			btreeVisited[nodeIndex] = true;
+
+			auto node = &blockMap[nodeIndex];
 			if (!node.isLeaf)
 				stderr.write(nodeStart, " / ", totalBlocks, '\r'); stderr.flush();
 
@@ -1440,7 +1454,7 @@ void fsck()
 									format!"%s of element %d in B-tree leaf node %d references out-of-bounds upstream block %d (out of %d)"(
 										i ? "End" : "Start",
 										elemIndex,
-										&node - blockMap.ptr,
+										nodeIndex,
 										use,
 										totalBlocks,
 									)
@@ -1458,7 +1472,7 @@ void fsck()
 									format!"Block %d in range of element %d in B-tree leaf node %d references out-of-bounds COW block %d (out of %d)"(
 										use - useStart,
 										elemIndex,
-										&node - blockMap.ptr,
+										nodeIndex,
 										use,
 										cowMap.length,
 									)
@@ -1473,17 +1487,28 @@ void fsck()
 							enforce(false,
 								format!"Element %d in B-tree leaf node %d has unknown type %s"(
 									elemIndex,
-									&node - blockMap.ptr,
+									nodeIndex,
 									elem.firstBlockRef.type,
 								)
 							);
 					}
 				}
 				else
-					scan(blockMap[elem.childIndex], elemStart, elemEnd);
+					scan(elem.childIndex, elemStart, elemEnd);
 			}
 		}
-		scan(blockMap[globals.btreeRoot], 0, totalBlocks);
+		scan(globals.btreeRoot, 0, totalBlocks);
+	}
+
+	{
+		stderr.writeln("Checking B-tree usage...");
+
+		foreach (nodeIndex, visited; btreeVisited)
+			enforce(visited,
+				format!"Unreferenced (lost) B-tree node: %d/%d"(
+					nodeIndex, globals.btreeLength,
+				)
+			);
 	}
 
 	ulong usedCowBlocks;
