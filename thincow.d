@@ -1436,10 +1436,35 @@ void fsck()
 			if (!node.isLeaf)
 				stderr.write(nodeStart, " / ", totalBlocks, '\r'); stderr.flush();
 
+			auto pos = nodeStart;
 			foreach (elemIndex, ref elem; node.elems[0 .. 1 + node.count])
 			{
 				auto elemStart = elemIndex ? elem.firstBlockIndex : nodeStart;
 				auto elemEnd = elemIndex < node.count ? node.elems[elemIndex + 1].firstBlockIndex : nodeEnd;
+				enforce(elemStart <= elemEnd,
+					format!"Invalid range %d-%d for element %d in B-tree leaf node %d"(
+						elemStart, elemEnd,
+						elemIndex,
+						nodeIndex,
+					)
+				);
+				enforce(elemStart < elemEnd,
+					format!"Empty range %d-%d for element %d in B-tree leaf node %d"(
+						elemStart, elemEnd,
+						elemIndex,
+						nodeIndex,
+					)
+				);
+				enforce(pos <= elemStart,
+					format!"Descending range %d-%d (after %d) for element %d in B-tree leaf node %d"(
+						elemStart, elemEnd,
+						pos,
+						elemIndex,
+						nodeIndex,
+					)
+				);
+				pos = elemEnd;
+
 				if (node.isLeaf)
 				{
 					switch (elem.firstBlockRef.type)
