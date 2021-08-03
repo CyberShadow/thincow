@@ -14,7 +14,7 @@
 
 import core.bitop;
 import core.stdc.errno;
-import core.sys.linux.sys.mman : MAP_ANONYMOUS;
+import core.sys.linux.sys.mman : MAP_ANONYMOUS, madvise, MADV_REMOVE;
 import core.sys.posix.fcntl;
 import core.sys.posix.sys.ioctl;
 import core.sys.posix.sys.mman;
@@ -1410,9 +1410,10 @@ void unreferenceBlock(BlockRef br) nothrow
 // *****************************************************************************
 // fsck
 
+ulong[] cowRefCount;
+
 bool fsck()
 {
-	ulong[] cowRefCount;
 	auto btreeVisited = new bool[globals.btreeLength];
 	size_t numErrors;
 
@@ -1532,11 +1533,7 @@ bool fsck()
 										cowMap.length,
 									));
 								else
-								{
-									if (cowRefCount.length < use + 1)
-										cowRefCount.length = use + 1;
 									cowRefCount[use]++;
-								}
 							}
 							break;
 						}
@@ -1574,10 +1571,12 @@ bool fsck()
 	cowLoop:
 		while (true)
 		{
-			enforce(i < cowMap.length, "Out-of-bounds COW free list block");
+			if (i >= cowMap.length)
+			{
+				logError("Out-of-bounds COW free list block");
+				break;
+			}
 
-			if (cowRefCount.length < i + 1)
-				cowRefCount.length = i + 1;
 			if (cowRefCount[i] == ulong.max)
 				logError(format!"Item %d occurs several times in the COW free list"(
 					i,
@@ -1608,15 +1607,21 @@ bool fsck()
 			}
 		}
 
-		assert(cowLastBlock != ulong.max); // unreachable otherwise
+		if (cowLastBlock == ulong.max)
+			logError("COW free list is corrupted");
+		else
 		if (cowLastBlock >= cowMap.length)
 			logError(format!"Out-of-bounds last COW block: %d/%d"(
 				cowLastBlock,
 				cowMap.length,
 			));
-		usedCowBlocks = cowLastBlock + 1;
+		else
+			usedCowBlocks = cowLastBlock + 1;
 	}
 
+	if (usedCowBlocks == 0)
+		logError("Not scanning COW map because the free list is corrupted.");
+	else
 	{
 		stderr.writeln("Scanning COW map...");
 
@@ -2157,8 +2162,12 @@ int thincow(
 	debug(btree) dumpToStderr!dumpBtree("");
 
 	if (fsck)
+	{
+		cowRefCount = cast(ulong[])mapFile(tempDir, "fsck-cow-refcount", ulong.sizeof, maxCowBlocks);
+		errnoEnforce(madvise(cowRefCount.ptr, cowRefCount.length * ulong.sizeof, MADV_REMOVE) == 0, "madvise");
 		if (!.fsck())
 			return 1;
+	}
 
 	if (noMount)
 		return 0;
