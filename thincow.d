@@ -1424,6 +1424,22 @@ bool fsck()
 	}
 
 	{
+		stderr.writeln("Checking globals...");
+		if (globals.btreeLength > blockMap.length)
+		{
+			logError(format!"Out-of-bounds B-tree length: %d/%d"(
+				globals.btreeLength, blockMap.length,
+			));
+		}
+		if (globals.btreeRoot >= globals.btreeLength)
+		{
+			logError(format!"Out-of-bounds B-tree root node index: %d/%d"(
+				globals.btreeRoot, globals.btreeLength,
+			));
+		}
+	}
+
+	{
 		stderr.writeln("Scanning B-tree...");
 
 		void scan(size_t nodeIndex, BlockIndex nodeStart, BlockIndex nodeEnd)
