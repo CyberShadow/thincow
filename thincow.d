@@ -1419,6 +1419,7 @@ bool fsck()
 	void logError(string s)
 	{
 		stderr.writeln("- ERROR: ", s);
+		stderr.flush();
 		numErrors++;
 	}
 
