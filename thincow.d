@@ -1507,9 +1507,12 @@ bool fsck()
 										use,
 										cowMap.length,
 									));
-								if (cowRefCount.length < use + 1)
-									cowRefCount.length = use + 1;
-								cowRefCount[use]++;
+								else
+								{
+									if (cowRefCount.length < use + 1)
+										cowRefCount.length = use + 1;
+									cowRefCount[use]++;
+								}
 							}
 							break;
 						}
