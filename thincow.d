@@ -1445,15 +1445,23 @@ bool fsck()
 		void scan(size_t nodeIndex, BlockIndex nodeStart, BlockIndex nodeEnd)
 		{
 			if (nodeIndex >= globals.btreeLength)
+			{
 				logError(format!"Out-of-bounds B-tree child node index: %d/%d"(
 					nodeIndex, globals.btreeLength,
 				));
-			else
+			}
+			if (nodeIndex >= blockMap.length)
+				return;
+
+			if (nodeIndex < globals.btreeLength)
 			{
 				if (btreeVisited[nodeIndex])
+				{
 					logError(format!"Multiple references to B-tree child node %d/%d"(
-						nodeIndex, globals.btreeLength,
-					));
+							nodeIndex, globals.btreeLength,
+						));
+					return;
+				}
 				btreeVisited[nodeIndex] = true;
 			}
 
