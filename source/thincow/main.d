@@ -14,7 +14,7 @@
 module thincow.main;
 
 import core.bitop : bsr;
-import core.sys.linux.sys.mman : MAP_ANONYMOUS, madvise, MADV_REMOVE;
+import core.sys.linux.sys.mman : MAP_ANONYMOUS;
 import core.sys.posix.fcntl;
 import core.sys.posix.sys.ioctl;
 import core.sys.posix.sys.mman;
@@ -100,7 +100,7 @@ int program(
 		totalBlocks += numBlocks;
 	});
 
-	void[] mapFile(string dir, string name, size_t recordSize, size_t numRecords)
+	void[] mapFile(string dir, string name, size_t recordSize, size_t numRecords, bool requireFresh = false)
 	{
 		auto size = recordSize * numRecords;
 		enforce(size / recordSize == numRecords, "Overflow");
@@ -118,7 +118,12 @@ int program(
 			path = dir.buildPath(name);
 
 			if (path.exists)
-				enforce(path.getSize() == size, "Found existing file, but it is of the wrong size: " ~ path);
+			{
+				if (requireFresh)
+					remove(path);
+				else
+					enforce(path.getSize() == size, "Found existing file, but it is of the wrong size: " ~ path);
+			}
 
 			auto fd = open(path.toStringz, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
 			errnoEnforce(fd >= 0, "open failed: " ~ path);
@@ -172,8 +177,7 @@ int program(
 
 	if (fsck)
 	{
-		cowRefCount = cast(ulong[])mapFile(tempDir, "fsck-cow-refcount", ulong.sizeof, maxCowBlocks);
-		errnoEnforce(madvise(cowRefCount.ptr, cowRefCount.length * ulong.sizeof, MADV_REMOVE) == 0, "madvise");
+		cowRefCount = cast(ulong[])mapFile(tempDir, "fsck-cow-refcount", ulong.sizeof, maxCowBlocks, true);
 		if (!.fsck())
 			return 1;
 	}
