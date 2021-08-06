@@ -71,6 +71,7 @@ function run_thincow() {
 				--build-only
 				-oft/tmp/thincow
 				-Ilib/import
+				-Isource
 				-L-lfuse
 				-g
 				-debug
@@ -82,7 +83,7 @@ function run_thincow() {
 					-cov
 				)
 			fi
-			"${args[@]}" thincow.d
+			"${args[@]}" source/thincow/main.d
 		) 9>> ../build.lock
 	else
 		echo '(Not rebuilding thincow as root...)'
