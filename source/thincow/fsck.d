@@ -13,6 +13,7 @@
 
 module thincow.fsck;
 
+import std.algorithm.comparison;
 import std.array : staticArray;
 import std.format : format;
 import std.stdio : stderr;
@@ -29,6 +30,7 @@ bool fsck()
 {
 	auto btreeVisited = new bool[globals.btreeLength];
 	size_t numErrors;
+	ulong cowRealLastBlock = 0;
 
 	void logError(string s)
 	{
@@ -146,7 +148,10 @@ bool fsck()
 										cowMap.length,
 									));
 								else
+								{
 									cowRefCount[use]++;
+									cowRealLastBlock = max(cowRealLastBlock, use);
+								}
 							}
 							break;
 						}
@@ -173,6 +178,26 @@ bool fsck()
 				logError(format!"Unreferenced (lost) B-tree node: %d/%d"(
 					nodeIndex, globals.btreeLength,
 				));
+	}
+
+	if (false)
+	{
+		stderr.writeln("Rebuilding COW map...");
+		ulong lastFree = 0;
+
+		foreach (ulong i; 1 .. cowRealLastBlock + 1)
+			if (cowRefCount[i] > 0)
+				cowMap[i] = COWIndex(COWIndex.Type.refCount, cowRefCount[i]);
+			else
+			{
+				cowMap[lastFree] = COWIndex(COWIndex.Type.nextFree, i);
+				lastFree = i;
+			}
+
+		cowMap[lastFree] = COWIndex(COWIndex.Type.lastBlock, cowRealLastBlock);
+
+		for (ulong i = cowRealLastBlock + 1; cowMap[i] !is COWIndex.init; i++)
+			cowMap[i] = COWIndex.init;
 	}
 
 	ulong usedCowBlocks;
