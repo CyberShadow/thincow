@@ -89,7 +89,7 @@ union BTreeNode
 
 BTreeNode[/*BTreeBlockIndex*/] blockMap;
 
-void dumpBtree(W)(ref W writer)
+void dumpBtree(W)(ref W writer, BlockIndex root = globals.btreeRoot)
 if (isOutputRange!(W, char))
 {
 	BlockIndex cbi = 0;
@@ -133,7 +133,7 @@ if (isOutputRange!(W, char))
 	}
 	put(writer, "btree:\n" ~ "\t^0\n");
 	depth++;
-	dump(globals.btreeRoot);
+	dump(root);
 	visitBlockIndex(totalBlocks);
 	writer.formattedWrite!"\t^%d\n"(totalBlocks);
 }
