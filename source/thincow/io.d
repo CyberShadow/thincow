@@ -162,6 +162,7 @@ void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 				break; // Not the same data
 			unreferenceBlock(prevBlockRef);
 			putBlockRef(prevBlockIndex, extrapolatedBlockRef);
+			referenceBlock(extrapolatedBlockRef);
 			writesDeduplicatedRetroactive++;
 			writesTotal++; // "Fake" write, to keep deduplication % sane
 
