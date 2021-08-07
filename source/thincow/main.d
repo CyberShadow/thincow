@@ -14,7 +14,7 @@
 module thincow.main;
 
 import core.bitop : bsr;
-import core.sys.linux.sys.mman : MAP_ANONYMOUS;
+import core.sys.linux.sys.mman : MAP_ANONYMOUS, MAP_NORESERVE;
 import core.sys.posix.fcntl;
 import core.sys.posix.sys.ioctl;
 import core.sys.posix.sys.mman;
@@ -57,6 +57,7 @@ int program(
 	Option!(size_t, "Hash table size.\nThe default is 1073741824 (1 GiB).", "BYTES") hashTableSize = 1024*1024*1024,
 	Option!(size_t, "Maximum size of the block map.", "BYTES") maxBlockMapSize = 1L << 63,
 	Option!(size_t, "Maximum number of blocks in the COW store.", "BLOCKS") maxCowBlocks = 1L << 63,
+	Switch!hiddenOption noReserve = false, // Dangerous!
 	Switch!("Enable retroactive deduplication (more I/O intensive).") retroactive = false,
 	Switch!("Run in foreground.", 'f') foreground = false,
 	Switch!("Open upstream devices in read-only mode (flushing will be disabled).", 'r') readOnlyUpstream = false,
@@ -111,7 +112,10 @@ int program(
 		if (dir == "-")
 		{
 			path = "(in memory) " ~ name;
-			ptr = mmap(null, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, 0, 0);
+			auto flags = MAP_PRIVATE | MAP_ANONYMOUS;
+			if (noReserve)
+				flags |= MAP_NORESERVE;
+			ptr = mmap(null, size, PROT_READ | PROT_WRITE, flags, 0, 0);
 		}
 		else
 		{
