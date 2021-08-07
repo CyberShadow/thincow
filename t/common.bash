@@ -101,7 +101,6 @@ function run_thincow() {
 		--data-dir=data
 		--block-size="$block_size"
 		--hash-table-size="$hash_table_size"
-		--fsck
 		target
 		"$@"
 	)
@@ -126,6 +125,8 @@ function stop_thincow() {
 	cp target/*.txt target/debug/*.txt result-$invocation/
 	fusermount -u target
 	wait $fifo_pid
+
+	run_thincow --fsck --no-mount
 }
 
 # Get disk usage of a file, in bytes.
