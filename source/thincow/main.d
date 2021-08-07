@@ -24,6 +24,7 @@ import std.algorithm.comparison;
 import std.bitmanip : BitArray;
 import std.exception : enforce, errnoEnforce;
 import std.file;
+import std.math.traits : isPowerOf2;
 import std.path;
 import std.stdio : stderr;
 import std.string;
@@ -43,6 +44,7 @@ import thincow.flush : useMap;
 import thincow.fsck : cowRefCount, fsck;
 import thincow.fuse;
 import thincow.hashtable : hashTable, HashTableBucket;
+import thincow.integrity;
 
 __gshared: // disable TLS
 
@@ -57,6 +59,7 @@ int program(
 	Option!(size_t, "Hash table size.\nThe default is 1073741824 (1 GiB).", "BYTES") hashTableSize = 1024*1024*1024,
 	Option!(size_t, "Maximum size of the block map.", "BYTES") maxBlockMapSize = 1L << 63,
 	Option!(size_t, "Maximum number of blocks in the COW store.", "BLOCKS") maxCowBlocks = 1L << 63,
+	Option!(uint, "Enable integrity checking, BITS per block.", "BITS") checksumBits = 0,
 	Switch!hiddenOption noReserve = false, // Dangerous!
 	Switch!("Enable retroactive deduplication (more I/O intensive).") retroactive = false,
 	Switch!("Run in foreground.", 'f') foreground = false,
@@ -160,6 +163,15 @@ int program(
 
 	uint bitsNeeded(ulong maxValue) { assert(maxValue); maxValue--; return maxValue ? 1 + bsr(maxValue) : 0; }
 	blockRefBits = bitsNeeded(maxCowBlocksLimit) + BlockRef.typeBits;
+
+	if (checksumBits)
+	{
+		enforce(checksumBits <= maxChecksumBits && isPowerOf2(checksumBits.value), "Invalid checksum size");
+		.checksumBits = checksumBits;
+		.checksums = cast(Checksum[])mapFile(metadataDir, "checksums", Checksum.sizeof,
+			(totalBlocks * checksumBits + maxChecksumBits - 1) / maxChecksumBits);
+		.checksumMask = ((Checksum(1) << (checksumBits - 1)) << 1) - 1; // Avoid UB with shift overflow
+	}
 
 	if (!readOnlyUpstream)
 	{

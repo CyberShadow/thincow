@@ -14,6 +14,7 @@
 module thincow.io;
 
 import std.exception : ErrnoException, assertNotThrown;
+import std.format : format;
 
 import core.sys.posix.unistd : pread;
 
@@ -21,7 +22,8 @@ import thincow.btree : getBlockRef, putBlockRef;
 import thincow.cow;
 import thincow.common;
 import thincow.devices : Dev, findDev;
-import thincow.hashtable : hashBlock, unhashBlock;
+import thincow.hashtable : hashBlock, unhashBlock, hashBytes;
+import thincow.integrity;
 import thincow.stats;
 
 __gshared: // disable TLS
@@ -31,8 +33,15 @@ const(ubyte)[] readBlock(Dev* dev, size_t devBlockIndex, ref ubyte[] blockBuf)
 {
 	dev.readRequests++;
 	BlockIndex blockIndex = dev.firstBlock + devBlockIndex;
+	auto savedChecksum = checksumBits ? getChecksum(blockIndex) : 0;
 	auto br = getBlockRef(blockIndex);
 	auto block = readBlock(br, blockBuf);
+	if (savedChecksum)
+	{
+		auto blockChecksum = hashBytes(block) & checksumMask;
+		if (savedChecksum != blockChecksum)
+			throw new Exception(format!"Checksum mismatch for block %d: expected %x, got %x"(blockIndex, savedChecksum, blockChecksum));
+	}
 	hashBlock(block, br);
 	return block;
 }
@@ -107,6 +116,8 @@ void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 {
 	dev.writeRequests++;
 	BlockIndex blockIndex = dev.firstBlock + devBlockIndex;
+	if (checksumBits)
+		putChecksum(blockIndex, hashBytes(block));
 	unreferenceBlock(getBlockRef(blockIndex));
 
 	// Check if we can extend from the previous block.

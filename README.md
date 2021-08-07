@@ -17,6 +17,7 @@ Features
 - Extent (B-tree) based data representation
 - Fault tolerant (errors from upstream devices are propagated to FUSE client)
 - Optional incremental flushing
+- Optional integrity verification
 
 Building
 --------
@@ -81,6 +82,7 @@ The following files are created:
 - `cowmap` contains an index for the COW block store. It is used to store a reference count for every block, so that `thincow` knows when a COW block can be freed.
 - `globals` is a fixed-length record containing some global variables, such as the B-tree size.
 - `cowdata` (stored in the `--data-dir` directory) holds the contents of COW blocks (blocks containing data which was never seen on an upstream device). Each block's contents is unique.
+- `checksums` will contain the per-block checksums, if `--checksum-bits` is enabled.
 
 Note that the above files are created as large sparse files, big enough to accommodate the worst case, but initially don't consume any real disk space.
 

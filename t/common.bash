@@ -101,6 +101,7 @@ function run_thincow() {
 		--data-dir=data
 		--block-size="$block_size"
 		--hash-table-size="$hash_table_size"
+		--checksum-bits=32
 		target
 		"$@"
 	)

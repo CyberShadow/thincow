@@ -27,6 +27,7 @@ void testSeed(Seed seed)
 {
 	rndGen.seed(seed);
 	auto blockSize = 1 << uniform(3, 12);
+	auto checksumBits = 1 << uniform(0, 6 + 1);
 	foreach (dir; ["upstream", "target", "control"])
 	{
 		if (dir.exists)
@@ -56,6 +57,7 @@ void testSeed(Seed seed)
 		"--data-dir=-",
 		"--block-size=" ~ blockSize.text,
 		"--hash-table-size=256",
+		"--checksum-bits=" ~ checksumBits.text,
 		"target",
 	];
 	Pid pid;
