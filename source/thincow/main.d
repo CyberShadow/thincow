@@ -21,6 +21,7 @@ import core.sys.posix.sys.mman;
 import core.sys.posix.unistd;
 
 import std.algorithm.comparison;
+import std.algorithm.searching;
 import std.bitmanip : BitArray;
 import std.exception : enforce, errnoEnforce;
 import std.file;
@@ -33,6 +34,7 @@ import std.traits : hasIndirections;
 import c.fuse.fuse;
 
 import ae.sys.file : listDir;
+import ae.utils.array;
 import ae.utils.funopt;
 import ae.utils.main;
 import ae.utils.math : roundUpToPowerOfTwo;
@@ -150,6 +152,11 @@ int program(
 	}
 
 	globals = mapRecords!Globals(metadataDir, "globals", 1).ptr;
+	if ((*globals).bytes.all!(b => b == 0))
+	{
+		stderr.writeln("Initializing globals.");
+		*globals = Globals.init;
+	}
 
 	auto btreeMaxLength = totalBlocks; // worst case
 	auto btreeMaxSize = btreeMaxLength * BTreeNode.sizeof;
