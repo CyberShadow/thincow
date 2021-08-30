@@ -157,6 +157,9 @@ int program(
 		stderr.writeln("Initializing globals.");
 		*globals = Globals.init;
 	}
+	enforce(globals.dataVersion == Globals.init.dataVersion,
+		"thincow format mismatch: data is format %d, program is format %d"
+		.format(globals.dataVersion, Globals.init.dataVersion));
 
 	auto btreeMaxLength = totalBlocks; // worst case
 	auto btreeMaxSize = btreeMaxLength * BTreeNode.sizeof;

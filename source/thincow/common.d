@@ -81,12 +81,15 @@ BlockIndex totalBlocks;
 /// These variables are persistent.
 struct Globals
 {
+	/// thincow data format version.
+	uint dataVersion = 1;
 	/// Number of allocated B-tree nodes so far.
 	BTreeBlockIndex btreeLength;
 	/// B-tree node index of the root node.
 	BTreeBlockIndex btreeRoot;
 }
 Globals* globals;
+static assert(Globals.sizeof != 16); // Indistinguishable from v0
 
 /// Command-line options.
 bool retroactiveDeduplication;
