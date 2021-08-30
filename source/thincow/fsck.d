@@ -314,6 +314,11 @@ bool fsck()
 	if (!numErrors)
 	{
 		stderr.writeln("Found no errors.");
+		if (globals.dirty)
+		{
+			stderr.writeln("Clearing dirty flag. (However, this is not a guarantee that there is no data corruption.)");
+			globals.dirty = false;
+		}
 		return true;
 	}
 	else

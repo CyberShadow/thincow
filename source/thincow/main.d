@@ -222,6 +222,8 @@ int program(
 			return 1;
 	}
 
+	enforce(!globals.dirty, "thincow exited uncleanly - run with --fsck");
+
 	if (noMount)
 		return 0;
 
@@ -250,6 +252,7 @@ int program(
 
 	stderr.writeln("Starting FUSE filesystem.");
 	scope(success) stderr.writeln("thincow exiting.");
+	scope(success) globals.dirty = false;
 	return fuse_main(f_args.argc, f_args.argv, &fsops, null);
 }
 
