@@ -22,6 +22,7 @@ import core.sys.posix.unistd;
 
 import std.algorithm.comparison;
 import std.algorithm.searching;
+import std.algorithm.sorting;
 import std.bitmanip : BitArray;
 import std.exception : enforce, errnoEnforce;
 import std.file;
@@ -100,12 +101,17 @@ int program(
 
 		Dev dev;
 		dev.name = de.baseName;
-		dev.firstBlock = totalBlocks;
 		dev.size = deviceSize;
 		dev.fd = fd;
 		devs ~= dev;
-		totalBlocks += numBlocks;
 	});
+	devs.sort!((ref a, ref b) => a.name < b.name);
+	foreach (ref dev; devs)
+	{
+		auto numBlocks = (dev.size + blockSize - 1) / blockSize;
+		dev.firstBlock = totalBlocks;
+		totalBlocks += numBlocks;
+	}
 
 	void[] mapData(string dir, string name, size_t recordSize, size_t numRecords, bool requireFresh = false)
 	{

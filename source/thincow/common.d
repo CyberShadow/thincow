@@ -82,7 +82,7 @@ BlockIndex totalBlocks;
 struct Globals
 {
 	/// thincow data format version.
-	uint dataVersion = 1;
+	uint dataVersion = 2;
 	/// Number of allocated B-tree nodes so far.
 	BTreeBlockIndex btreeLength;
 	/// B-tree node index of the root node.
