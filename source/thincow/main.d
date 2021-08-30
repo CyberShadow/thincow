@@ -28,6 +28,7 @@ import std.math.traits : isPowerOf2;
 import std.path;
 import std.stdio : stderr;
 import std.string;
+import std.traits : hasIndirections;
 
 import c.fuse.fuse;
 
@@ -104,7 +105,7 @@ int program(
 		totalBlocks += numBlocks;
 	});
 
-	void[] mapFile(string dir, string name, size_t recordSize, size_t numRecords, bool requireFresh = false)
+	void[] mapData(string dir, string name, size_t recordSize, size_t numRecords, bool requireFresh = false)
 	{
 		auto size = recordSize * numRecords;
 		enforce(size / recordSize == numRecords, "Overflow");
@@ -141,25 +142,32 @@ int program(
 		return ptr[0 .. size];
 	}
 
-	globals = cast(Globals*)mapFile(metadataDir, "globals", Globals.sizeof, 1).ptr;
+	T[] mapRecords(T)(string dir, string name, size_t numRecords, bool requireFresh = false)
+	{
+		static assert(!hasIndirections!T);
+		enum recordSize = T.sizeof;
+		return cast(T[])mapData(dir, name, recordSize, numRecords, requireFresh);
+	}
+
+	globals = mapRecords!Globals(metadataDir, "globals", 1).ptr;
 
 	auto btreeMaxLength = totalBlocks; // worst case
 	auto btreeMaxSize = btreeMaxLength * BTreeNode.sizeof;
 	if (btreeMaxSize > maxBlockMapSize)
 		btreeMaxSize = maxBlockMapSize;
 	btreeMaxLength = btreeMaxSize / BTreeNode.sizeof;
-	blockMap = cast(BTreeNode[])mapFile(metadataDir, "blockmap", BTreeNode.sizeof, btreeMaxLength);
+	blockMap = mapRecords!BTreeNode(metadataDir, "blockmap", btreeMaxLength);
 
 	auto hashTableLength = hashTableSize / HashTableBucket.sizeof;
 	enforce(hashTableLength * HashTableBucket.sizeof == hashTableSize, "Hash table size must be a multiple of %s".format(HashTableBucket.sizeof));
 	enforce(hashTableLength == hashTableLength.roundUpToPowerOfTwo, "Hash table size must be a power of 2");
 	enforce(hashTableLength <= 0x1_0000_0000, "Hash table is too large");
-	hashTable = cast(HashTableBucket[])mapFile(metadataDir, "hashtable", HashTableBucket.sizeof, hashTableLength);
+	hashTable = mapRecords!HashTableBucket(metadataDir, "hashtable", hashTableLength);
 
 	auto maxCowBlocksLimit = totalBlocks + 2; // Index 0 is reserved, and one more for swapping
 	maxCowBlocks = min(maxCowBlocks, maxCowBlocksLimit);
-	cowMap = cast(COWIndex[])mapFile(metadataDir, "cowmap", COWIndex.sizeof, maxCowBlocks);
-	cowData = cast(ubyte[])mapFile(dataDir, "cowdata", blockSize, maxCowBlocks);
+	cowMap = mapRecords!COWIndex(metadataDir, "cowmap", maxCowBlocks);
+	cowData = cast(ubyte[])mapData(dataDir, "cowdata", blockSize, maxCowBlocks);
 
 	uint bitsNeeded(ulong maxValue) { assert(maxValue); maxValue--; return maxValue ? 1 + bsr(maxValue) : 0; }
 	blockRefBits = bitsNeeded(maxCowBlocksLimit) + BlockRef.typeBits;
@@ -168,14 +176,14 @@ int program(
 	{
 		enforce(checksumBits <= maxChecksumBits && isPowerOf2(checksumBits.value), "Invalid checksum size");
 		.checksumBits = checksumBits;
-		.checksums = cast(Checksum[])mapFile(metadataDir, "checksums", Checksum.sizeof,
+		.checksums = mapRecords!Checksum(metadataDir, "checksums",
 			(totalBlocks * checksumBits + maxChecksumBits - 1) / maxChecksumBits);
 		.checksumMask = ((Checksum(1) << (checksumBits - 1)) << 1) - 1; // Avoid UB with shift overflow
 	}
 
 	if (!readOnlyUpstream)
 	{
-		auto useMapBuf = mapFile(tempDir, "usemap", 1, (totalBlocks + 7) / 8);
+		auto useMapBuf = mapData(tempDir, "usemap", 1, (totalBlocks + 7) / 8);
 		useMap = BitArray(useMapBuf, totalBlocks);
 	}
 
@@ -193,7 +201,7 @@ int program(
 
 	if (fsck)
 	{
-		cowRefCount = cast(ulong[])mapFile(tempDir, "fsck-cow-refcount", ulong.sizeof, maxCowBlocks, true);
+		cowRefCount = mapRecords!ulong(tempDir, "fsck-cow-refcount", maxCowBlocks, true);
 		if (!.fsck())
 			return 1;
 	}
