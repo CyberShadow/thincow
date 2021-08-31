@@ -30,7 +30,7 @@ Usage
 -----
 
 1. Create a directory containing the upstream device(s).
-   You can use symlinks to add block devices in `/dev`.
+   You can use symlinks to add block devices from `/dev`.
 
 2. Create data (and optionally metadata) directories for `thincow`'s use.
 
