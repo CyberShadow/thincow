@@ -1,0 +1,25 @@
+name: test
+on: [ push, pull_request ]
+jobs:
+  test:
+    runs-on: ubuntu-20.04
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        submodules: true
+    - name: Install D compiler
+      uses: dlang-community/setup-dlang@1ccbc70a0eff7f264857b53c562aa45fd7f1e479
+      with:
+        compiler: dmd-2.097.0
+    - name: Setup
+      run: |
+        sudo apt-get -y install libfuse2 libfuse-dev
+        wget -O doveralls "https://dump.cy.md/fea952abbbb3587f5c6c0245f82ee318/doveralls"
+        chmod +x doveralls
+    - name: Test
+      run: |
+        t/all.sh
+    - name: Upload coverage
+      run: |
+        find t/tmp/cov -type f -not -name 'source-thincow-*.lst' -delete
+        ./doveralls
