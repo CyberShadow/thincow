@@ -1,0 +1,96 @@
+.TH THINCOW 1
+.SH NAME
+thincow \- create a deduplicated, COW view of block devices as a FUSE filesystem
+.SH SYNOPSIS
+.B thincow
+\fIOPTION\fR...
+.BR \fITARGET\fR
+.SH DESCRIPTION
+.B thincow
+enables non-destructive, copy-on-write edits of block devices involving copying/moving a lot of data around, using deduplication for minimal additional disk usage.
+
+For a detailed description, please see the full documentation:
+
+.I https://github.com/CyberShadow/thincow#readme
+.SH OPTIONS
+
+.TP
+.B TARGET
+Where to mount the FUSE filesystem.
+
+.TP
+.BR \-h ", " \-\-help
+Output a usage message and exit.
+
+.TP
+\fB\-\-upstream\fP=\fIPATH\fP
+Directory containing upstream devices/symlinks.
+
+.TP
+\fB\-\-data\-dir\fP=\fIPATH\fP
+Directory where to store COW blocks.
+
+.TP
+\fB\-\-metadata\-dir\fP=\fIPATH\fP
+Directory where to store metadata. If unspecified, defaults to the data directory.
+
+Specify "-" to use RAM.
+
+.TP
+\fB\-\-temp\-dir\fP=\fIPATH\fP
+Directory where to store large temporary data. If unspecified, defaults to "-" (RAM).
+
+.TP
+\fB\-\-block\-size\fP=\fIBYTES\fP
+Block size.
+Larger blocks means smaller metadata, but writes smaller than one block will cause a read-modify-write. The default is 512.
+
+.TP
+\fB\-\-hash\-table\-size\fP=\fIBYTES\fP
+Hash table size.
+The default is 1073741824 (1 GiB).
+
+.TP
+\fB\-\-max\-block\-map\-size\fP=\fIBYTES\fP
+Maximum size of the block map.
+
+.TP
+\fB\-\-max\-cow\-blocks\fP=\fIBLOCKS\fP
+Maximum number of blocks in the COW store.
+
+.TP
+.B \-\-retroactive
+Enable retroactive deduplication (more I/O intensive).
+
+Not recommended (very little additional deduplication efficiency in practice).
+
+.TP
+.BR \-f ", " \-\-foreground
+Run in foreground.
+
+.TP
+.BR \-r ", " \-\-read\-only\-upstream
+Open upstream devices in read-only mode (flushing will be disabled).
+
+.TP
+\fB\-o\fP, \fB\-\-options\fP=\fISTR\fP
+Additional FUSE options (e.g. debug).
+
+.TP
+.B \-\-fsck
+Perform data validity check on startup.
+
+.TP
+.B \-\-no\-mount
+Don't actually mount the filesystem, and exit after initialization/fsck.
+
+.SH BUGS
+Please report defects and enhancement requests to the GitHub issue tracker:
+
+.I https://github.com/CyberShadow/thincow/issues
+
+.SH AUTHORS
+
+\fBthincow\fR is written by Vladimir Panteleev <thincow@c\fRy.m\fRd> and contributors:
+
+.I https://github.com/CyberShadow/thincow/graphs/contributors
