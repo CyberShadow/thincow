@@ -11,15 +11,6 @@ jobs:
       uses: dlang-community/setup-dlang@1ccbc70a0eff7f264857b53c562aa45fd7f1e479
       with:
         compiler: dmd-2.097.0
-    - name: Install Doveralls
-      run: |
-        sudo apt-get -y install libcurl4-openssl-dev
-        (
-          cd ..
-          git clone -b github-actions https://github.com/CyberShadow/doveralls.git
-          cd doveralls
-          dub build
-        )
     - name: Setup
       run: |
         sudo apt-get -y install libfuse2 libfuse-dev
@@ -28,7 +19,6 @@ jobs:
     - name: Test
       run: |
         t/all.sh
-    - name: Upload coverage
-      run: |
         find t/tmp/cov -type f -not -name 'source-thincow-*.lst' -delete
-        ../doveralls/doveralls --token ${{ secrets.GITHUB_TOKEN }}
+    - name: Upload coverage
+      uses: codecov/codecov-action@v1
