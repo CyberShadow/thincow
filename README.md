@@ -81,7 +81,7 @@ The following files are created:
 - `hashtable` contains a hash table of all blocks seen so far. Each element is the same as in `blockmap`.
 - `cowmap` contains an index for the COW block store. It is used to store a reference count for every block, so that `thincow` knows when a COW block can be freed.
 - `globals` is a fixed-length record containing some global variables, such as the B-tree size.
-- `cowdata` (stored in the `--data-dir` directory) holds the contents of COW blocks (blocks containing data which was never seen on an upstream device). Each block's contents is unique.
+- `cowdata` (stored in the `--data-dir` directory) holds the contents of COW blocks (blocks containing data which was never seen on an upstream device). Each block's contents is unique (insofar as the hash table capacity allows).
 - `checksums` will contain the per-block checksums, if `--checksum-bits` is enabled.
 
 Note that the above files are created as large sparse files, big enough to accommodate the worst case, but initially don't consume any real disk space.
