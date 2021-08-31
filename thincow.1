@@ -2,9 +2,7 @@
 .SH NAME
 thincow \- create a deduplicated, COW view of block devices as a FUSE filesystem
 .SH SYNOPSIS
-.B thincow
-\fIOPTION\fR...
-.BR \fITARGET\fR
+\fBthincow\fP \fIOPTION\fP... \fITARGET\fP
 .SH DESCRIPTION
 .B thincow
 enables non-destructive, copy-on-write edits of block devices involving copying/moving a lot of data around, using deduplication for minimal additional disk usage.
@@ -15,73 +13,73 @@ For a detailed description, please see the full documentation:
 .SH OPTIONS
 
 .TP
-.B TARGET
+\fITARGET\fP
 Where to mount the FUSE filesystem.
 
 .TP
-.BR \-h ", " \-\-help
-Output a usage message and exit.
-
-.TP
-\fB\-\-upstream\fP=\fIPATH\fP
+\fB--upstream\fP=\fIPATH\fP
 Directory containing upstream devices/symlinks.
 
 .TP
-\fB\-\-data\-dir\fP=\fIPATH\fP
+\fB--data-dir\fP=\fIPATH\fP
 Directory where to store COW blocks.
 
 .TP
-\fB\-\-metadata\-dir\fP=\fIPATH\fP
+\fB--metadata-dir\fP=\fIPATH\fP
 Directory where to store metadata. If unspecified, defaults to the data directory.
 
 Specify "-" to use RAM.
 
 .TP
-\fB\-\-temp\-dir\fP=\fIPATH\fP
+\fB--temp-dir\fP=\fIPATH\fP
 Directory where to store large temporary data. If unspecified, defaults to "-" (RAM).
 
 .TP
-\fB\-\-block\-size\fP=\fIBYTES\fP
+\fB--block-size\fP=\fIBYTES\fP
 Block size.
+
 Larger blocks means smaller metadata, but writes smaller than one block will cause a read-modify-write. The default is 512.
 
 .TP
-\fB\-\-hash\-table\-size\fP=\fIBYTES\fP
+\fB--hash-table-size\fP=\fIBYTES\fP
 Hash table size.
+
 The default is 1073741824 (1 GiB).
 
 .TP
-\fB\-\-max\-block\-map\-size\fP=\fIBYTES\fP
+\fB--max-block-map-size\fP=\fIBYTES\fP
 Maximum size of the block map.
 
 .TP
-\fB\-\-max\-cow\-blocks\fP=\fIBLOCKS\fP
+\fB--max-cow-blocks\fP=\fIBLOCKS\fP
 Maximum number of blocks in the COW store.
 
 .TP
-.B \-\-retroactive
-Enable retroactive deduplication (more I/O intensive).
-
-Not recommended (very little additional deduplication efficiency in practice).
+\fB--checksum-bits\fP=\fIBITS\fP
+Enable integrity checking, BITS per block.
 
 .TP
-.BR \-f ", " \-\-foreground
+\fB--retroactive\fP
+Enable retroactive deduplication (more I/O intensive).
+
+.TP
+\fB-f\fP, \fB--foreground\fP
 Run in foreground.
 
 .TP
-.BR \-r ", " \-\-read\-only\-upstream
+\fB-r\fP, \fB--read-only-upstream\fP
 Open upstream devices in read-only mode (flushing will be disabled).
 
 .TP
-\fB\-o\fP, \fB\-\-options\fP=\fISTR\fP
+\fB-o\fP, \fB--options\fP=\fISTR\fP
 Additional FUSE options (e.g. debug).
 
 .TP
-.B \-\-fsck
+\fB--fsck\fP
 Perform data validity check on startup.
 
 .TP
-.B \-\-no\-mount
+\fB--no-mount\fP
 Don't actually mount the filesystem, and exit after initialization/fsck.
 
 .SH BUGS

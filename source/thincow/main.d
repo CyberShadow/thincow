@@ -28,7 +28,7 @@ import std.exception : enforce, errnoEnforce;
 import std.file;
 import std.math.traits : isPowerOf2;
 import std.path;
-import std.stdio : stderr;
+import std.stdio : stdout, stderr;
 import std.string;
 import std.traits : hasIndirections;
 
@@ -71,8 +71,35 @@ int program(
 	Option!(string[], "Additional FUSE options (e.g. debug).", "STR", 'o') options = null,
 	Switch!("Perform data validity check on startup.") fsck = false,
 	Switch!("Don't actually mount the filesystem, and exit after initialization/fsck.") noMount = false,
+	Switch!hiddenOption man = false,
 )
 {
+	if (man)
+	{
+		stdout.write(generateManPage!program(
+			"thincow",
+			".B thincow
+enables non-destructive, copy-on-write edits of block devices involving copying/moving a lot of data around, using deduplication for minimal additional disk usage.
+
+For a detailed description, please see the full documentation:
+
+.I https://github.com/CyberShadow/thincow#readme",
+			null,
+			`.SH BUGS
+Please report defects and enhancement requests to the GitHub issue tracker:
+
+.I https://github.com/CyberShadow/thincow/issues
+
+.SH AUTHORS
+
+\fBthincow\fR is written by Vladimir Panteleev <thincow@c\fRy.m\fRd> and contributors:
+
+.I https://github.com/CyberShadow/thincow/graphs/contributors
+`,
+		));
+		return 0;
+	}
+
 	enforce(upstream, "No upstream device directory specified");
 	enforce(dataDir, "No data directory specified");
 	if (!metadataDir)
