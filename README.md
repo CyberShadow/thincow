@@ -1,4 +1,4 @@
-thincow [![Build Status](https://travis-ci.org/CyberShadow/thincow.svg?branch=master)](https://travis-ci.org/CyberShadow/thincow) [![Coverage Status](https://coveralls.io/repos/github/CyberShadow/thincow/badge.svg?branch=master)](https://coveralls.io/github/CyberShadow/thincow?branch=master)
+thincow [![test](https://github.com/CyberShadow/aconfmgr/actions/workflows/test.yml/badge.svg)](https://github.com/CyberShadow/aconfmgr/actions/workflows/test.yml)[![codecov](https://codecov.io/gh/CyberShadow/thincow/branch/master/graph/badge.svg?token=RKDOR5ID8L)](https://codecov.io/gh/CyberShadow/thincow)
 =======
 
 `thincow` enables non-destructive, copy-on-write edits of block devices involving copying/moving a lot of data around, using deduplication for minimal additional disk usage.
