@@ -35,6 +35,7 @@ import thincow.devices;
 import thincow.flush : getFlushStatus, handleFlushClose;
 import thincow.hashtable : dumpHashTable;
 import thincow.io;
+import thincow.signals : initSignals, beginWrite;
 import thincow.stats : dumpStats;
 
 __gshared: // disable TLS
@@ -99,6 +100,8 @@ extern(C) nothrow
 				pidFile.write(thisProcessID);
 				pidFile.flush();
 			}());
+
+		initSignals();
 
 		return null;
 	}
@@ -267,7 +270,10 @@ extern(C) nothrow
 		{
 			if (auto phandler = fi.fh in closeHandlers)
 			{
-				(*phandler)(files[fi.fh]);
+				{
+					auto writeLock = beginWrite();
+					(*phandler)(files[fi.fh]);
+				}
 				closeHandlers.remove(fi.fh);
 			}
 			files.remove(fi.fh);
@@ -352,6 +358,8 @@ extern(C) nothrow
 		}
 		if (fi.fh >= FuseHandle.firstDevice)
 		{
+			auto writeLock = beginWrite();
+
 			auto devIndex = fi.fh - FuseHandle.firstDevice;
 			if (devIndex >= devs.length) return -EBADFD;
 			auto dev = &devs[devIndex];

@@ -114,9 +114,6 @@ const(ubyte)[] tryReadBlock(BlockRef br, ref ubyte[] blockBuf) nothrow
 /// Write a block to a device and a given address.
 void writeBlock(Dev* dev, size_t devBlockIndex, const(ubyte)[] block) nothrow
 {
-	if (!globals.dirty)
-		globals.dirty = true;
-
 	dev.writeRequests++;
 	BlockIndex blockIndex = dev.firstBlock + devBlockIndex;
 	if (checksumBits)
