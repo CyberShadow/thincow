@@ -3,4 +3,4 @@
 	url = https://github.com/CyberShadow/ae.git
 [submodule "dfuse"]
 	path = lib/dfuse
-	url = https://github.com/CyberShadow/dfuse.git
+	url = https://github.com/dlang-community/dfuse.git
