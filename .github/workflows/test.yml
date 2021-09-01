@@ -23,3 +23,7 @@ jobs:
     - name: Dub build
       run: |
         dub build
+    - name: Test that man page is up to date
+      run: |
+        ./thincow --man '' > thincow.1
+        git diff --exit-code
