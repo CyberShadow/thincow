@@ -67,6 +67,7 @@ int program(
 	Switch!hiddenOption noReserve = false, // Dangerous!
 	Switch!("Enable retroactive deduplication (more I/O intensive).") retroactive = false,
 	Switch!("Run in foreground.", 'f') foreground = false,
+	Option!(string, "Lock and write PID to this file.", "PATH", 0, "pid-file") pidFilePath = null,
 	Switch!("Open upstream devices in read-only mode (flushing will be disabled).", 'r') readOnlyUpstream = false,
 	Option!(string[], "Additional FUSE options (e.g. debug).", "STR", 'o') options = null,
 	Switch!("Perform data validity check on startup.") fsck = false,
@@ -108,6 +109,13 @@ Please report defects and enhancement requests to the GitHub issue tracker:
 	.blockSize = blockSize;
 	.retroactiveDeduplication = retroactive;
 	.readOnlyUpstream = readOnlyUpstream;
+
+	if (pidFilePath)
+	{
+		pidFile.open(pidFilePath, "w+b");
+		enforce(pidFile.tryLock(), "Failed to acquire lock on PID file " ~ pidFilePath ~ ". Is another instance running?");
+		// PID will be written in fs_init (after fork).
+	}
 
 	upstream.value.listDir!((de)
 	{
@@ -255,6 +263,7 @@ Please report defects and enhancement requests to the GitHub issue tracker:
 		return 0;
 
 	fuse_operations fsops;
+	fsops.init = &fs_init;
 	fsops.readdir = &fs_readdir;
 	fsops.getattr = &fs_getattr;
 	fsops.open = &fs_open;

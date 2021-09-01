@@ -17,6 +17,7 @@ import std.algorithm.comparison;
 import std.array;
 import std.exception;
 import std.range.primitives;
+import std.stdio : File;
 import std.string;
 
 import core.stdc.errno;
@@ -86,8 +87,22 @@ void makeWritableFile(fuse_file_info* fi, CloseHandler handleClose) nothrow
 	closeHandlers[fi.fh] = handleClose;
 }
 
+File pidFile;
+
 extern(C) nothrow
 {
+	void* fs_init(fuse_conn_info* conn)
+	{
+		if (pidFile.isOpen)
+			assertNotThrown({
+				import std.process : thisProcessID;
+				pidFile.write(thisProcessID);
+				pidFile.flush();
+			}());
+
+		return null;
+	}
+
 	int fs_getattr(const char* c_path, stat_t* s)
 	{
 		auto path = c_path.fromStringz;
