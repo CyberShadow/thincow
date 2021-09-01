@@ -14,8 +14,6 @@ jobs:
     - name: Setup
       run: |
         sudo apt-get -y install libfuse2 libfuse-dev
-        # wget -O doveralls "https://dump.cy.md/fea952abbbb3587f5c6c0245f82ee318/doveralls"
-        # chmod +x doveralls
     - name: Test
       run: |
         t/all.sh
