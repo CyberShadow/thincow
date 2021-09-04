@@ -134,7 +134,7 @@ extern(C) nothrow
 					auto dev = getDev(path);
 					if (!dev) return -ENOENT;
 					s.st_size = dev.size;
-					s.st_mode = S_IFREG | S_IRUSR | S_IWUSR;
+					s.st_mode = S_IFREG | S_IRUSR | (readOnly ? 0 : S_IWUSR);
 				}
 				else
 					return -ENOENT;
@@ -358,6 +358,9 @@ extern(C) nothrow
 		}
 		if (fi.fh >= FuseHandle.firstDevice)
 		{
+			if (readOnly)
+				return -EROFS;
+
 			auto writeLock = beginWrite();
 
 			auto devIndex = fi.fh - FuseHandle.firstDevice;

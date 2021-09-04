@@ -42,7 +42,8 @@ const(ubyte)[] readBlock(Dev* dev, size_t devBlockIndex, ref ubyte[] blockBuf)
 		if (savedChecksum != blockChecksum)
 			throw new Exception(format!"Checksum mismatch for block %d: expected %x, got %x"(blockIndex, savedChecksum, blockChecksum));
 	}
-	hashBlock(block, br);
+	if (!readOnly)
+		hashBlock(block, br);
 	return block;
 }
 

@@ -68,6 +68,7 @@ int program(
 	Switch!("Enable retroactive deduplication (more I/O intensive).") retroactive = false,
 	Switch!("Run in foreground.", 'f') foreground = false,
 	Option!(string, "Lock and write PID to this file.", "PATH", 0, "pid-file") pidFilePath = null,
+	Switch!("Read-only mode (all writing will be disabled).\nImplies --read-only-upstream.", 'R') readOnly = false,
 	Switch!("Open upstream devices in read-only mode (flushing will be disabled).", 'r') readOnlyUpstream = false,
 	Option!(string[], "Additional FUSE options (e.g. debug).", "STR", 'o') options = null,
 	Switch!("Perform data validity check on startup.") fsck = false,
@@ -105,9 +106,12 @@ Please report defects and enhancement requests to the GitHub issue tracker:
 	enforce(dataDir, "No data directory specified");
 	if (!metadataDir)
 		metadataDir = dataDir;
+	if (readOnly)
+		readOnlyUpstream = true;
 
 	.blockSize = blockSize;
 	.retroactiveDeduplication = retroactive;
+	.readOnly = readOnly;
 	.readOnlyUpstream = readOnlyUpstream;
 
 	if (pidFilePath)
@@ -176,10 +180,10 @@ Please report defects and enhancement requests to the GitHub issue tracker:
 					enforce(path.getSize() == size, "Found existing file, but it is of the wrong size: " ~ path);
 			}
 
-			auto fd = open(path.toStringz, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+			auto fd = open(path.toStringz, readOnly ? (O_RDONLY) : (O_RDWR | O_CREAT), S_IRUSR | S_IWUSR);
 			errnoEnforce(fd >= 0, "open failed: " ~ path);
 			ftruncate(fd, size);
-			ptr = mmap(null, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+			ptr = mmap(null, size, PROT_READ | (readOnly ? 0 : PROT_WRITE), MAP_SHARED, fd, 0);
 		}
 		errnoEnforce(ptr != MAP_FAILED, "mmap failed: " ~ path);
 		return ptr[0 .. size];

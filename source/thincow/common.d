@@ -95,6 +95,7 @@ static assert(Globals.sizeof != 16); // Indistinguishable from v0
 
 /// Command-line options.
 bool retroactiveDeduplication;
+bool readOnly;
 bool readOnlyUpstream;
 
 version (unittest)
