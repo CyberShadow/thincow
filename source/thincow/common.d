@@ -90,6 +90,7 @@ Globals* globals;
 
 /// Command-line options.
 bool retroactiveDeduplication;
+bool readOnly;
 bool readOnlyUpstream;
 
 version (unittest)
