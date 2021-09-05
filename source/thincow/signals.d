@@ -41,6 +41,15 @@ private void handleCONT(int sig)
 	signal(SIGTSTP, &handleTSTP);
 }
 
+private void singleSigProcMask(int signal, int action)
+{
+	sigset_t set;
+	sigemptyset(&set);
+	sigaddset(&set, signal);
+	int ret = sigprocmask(action, &set, null);
+	if (ret != 0) assert(false, "sigprocmask");
+}
+
 void initSignals()
 {
 	signal(SIGCONT, &handleCONT);
@@ -57,19 +66,11 @@ auto beginWrite()
 		@disable this(this);
 		~this()
 		{
-			sigset_t set;
-			sigemptyset(&set);
-			sigaddset(&set, SIGTSTP);
-			int ret = sigprocmask(SIG_UNBLOCK, &set, null);
-			if (ret != 0) assert(false, "sigprocmask");
+			singleSigProcMask(SIGTSTP, SIG_UNBLOCK);
 		}
 	}
 
-	sigset_t set;
-	sigemptyset(&set);
-	sigaddset(&set, SIGTSTP);
-	int ret = sigprocmask(SIG_BLOCK, &set, null);
-	if (ret != 0) assert(false, "sigprocmask");
+	singleSigProcMask(SIGTSTP, SIG_BLOCK);
 
 	if (!globals.dirty)
 		globals.dirty = true;
