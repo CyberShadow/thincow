@@ -1,11 +1,22 @@
+import core.sys.posix.signal;
+import core.sys.posix.sys.wait;
+import core.sys.posix.unistd;
+import core.thread.osthread;
+import core.time;
+
 import std.algorithm.comparison;
 import std.algorithm.mutation;
 import std.conv;
 import std.exception;
 import std.file;
+import std.format;
+import std.path;
 import std.process;
 import std.random;
 import std.stdio;
+import std.string;
+
+import ae.sys.file : copyRecurse;
 
 alias Seed = typeof(unpredictableSeed());
 
@@ -49,12 +60,22 @@ void testSeed(Seed seed)
 		copy(f.name, "control/" ~ d.to!string);
 	}
 
+	auto workDir = format("stress.%d", seed);
+	mkdir(workDir);
+	scope(exit) rmdirRecurse(workDir);
+
+	auto dataDir = workDir.buildPath("data");
+	mkdir(dataDir);
+
+	auto pidFile = workDir.buildPath("thincow.pid");
+
 	auto pipe = .pipe();
 	enum foreground = false;
 	auto args = [
 		"tmp/thincow",
 		"--upstream=upstream",
-		"--data-dir=-",
+		"--data-dir=" ~ dataDir,
+		"--pid-file=" ~ pidFile,
 		"--block-size=" ~ blockSize.text,
 		"--hash-table-size=256",
 		"--checksum-bits=" ~ checksumBits.text,
@@ -76,7 +97,23 @@ void testSeed(Seed seed)
 
 	static char[] bufA, bufB;
 
-	foreach (_; 0 .. uniform(1, 100))
+	int tstpFork = fork();
+	errnoEnforce(tstpFork >= 0, "fork");
+	if (tstpFork == 0) // Use a fork to avoid a GC deadlock
+	{
+		(){
+			auto pid = readText(pidFile).to!int;
+			Thread.sleep(uniform(1, 100).msecs);
+			kill(pid, SIGTSTP);
+			while (readText(format!"/proc/%d/status"(pid)).splitLines[2][7] != 'T')
+				stderr.writeln("Waiting...");
+			copyRecurse(dataDir, dataDir ~ ".snapshot");
+			kill(pid, SIGCONT);
+			_exit(0);
+		}();
+	}
+
+	foreach (_; 0 .. uniform(1, 1000))
 		final switch (uniform(0, 2))
 		{
 			case 0: // read
@@ -125,11 +162,20 @@ void testSeed(Seed seed)
 		foreach (s; 0 .. 2)
 			files[d][s].destroy();
 
+	{
+		int tstpStatus;
+		errnoEnforce(waitpid(tstpFork, &tstpStatus, 0) == tstpFork, "waitpid");
+		enforce(tstpStatus == 0, "TSTP fork failed");
+	}
+
 	enforce(spawnProcess(["fusermount", "-u", "target"]).wait() == 0, "Can't unmount");
 	if (foreground) enforce(pid.wait() == 0, "thincow failed on exit");
 	while (pipe.readEnd.readln()) {}
 
-	enforce(spawnProcess(args ~ ["--fsck", "--no-mount", "--foreground", "-o=debug"]).wait() == 0, "fsck failed");
+	auto fsckArgs = ["--fsck", "--no-mount", "--foreground", "-o=debug"];
+	enforce(spawnProcess(args ~ fsckArgs).wait() == 0, "fsck failed");
+
+	enforce(spawnProcess(args.replace("--data-dir=" ~ dataDir, "--data-dir=" ~ dataDir ~ ".snapshot") ~ fsckArgs).wait() == 0, "fsck of snapshot failed");
 
 	foreach (dir; ["upstream", "target", "control"])
 		dir.rmdirRecurse();
