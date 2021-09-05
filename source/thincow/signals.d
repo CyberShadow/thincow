@@ -31,14 +31,7 @@ private void handleTSTP(int sig)
 	if (globals.dirty)
 		globals.dirty = false;
 
-	signal(SIGTSTP, SIG_DFL);
-	raise(SIGTSTP);
-}
-
-private void handleCONT(int sig)
-{
-	signal(SIGCONT, &handleCONT);
-	signal(SIGTSTP, &handleTSTP);
+	raise(SIGSTOP);
 }
 
 private void singleSigProcMask(int signal, int action)
@@ -52,8 +45,8 @@ private void singleSigProcMask(int signal, int action)
 
 void initSignals()
 {
-	signal(SIGCONT, &handleCONT);
 	signal(SIGTSTP, &handleTSTP);
+	singleSigProcMask(SIGTSTP, SIG_UNBLOCK); // Undo FUSE's blocking
 }
 
 /// Sets the dirty flag and blocks TSTP for the lifetime of the return value.
