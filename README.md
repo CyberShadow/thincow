@@ -182,7 +182,7 @@ When `thincow` receives the `SIGTSTP` signal, it waits for the current operation
   2. Send `SIGTSTP` to the PID contained in the PID file specified by the `--pid-file` option.
   
      ```console
-     $ kill -STSP $(cat thincow.pid)
+     $ kill -TSTP $(cat thincow.pid)
      ```
   
   3. Wait until the thincow process enters the `T (stopped)` state.
